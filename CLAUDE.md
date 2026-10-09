@@ -10,8 +10,11 @@
 
 ## Key IDs
 - Supabase project: `cjilkqzifyhssbsiqgfu` (NBP Portal)
-- Vercel project: `prj_esGXWgj1jyLoC45LO4jAwX7u7jW8`
-- Vercel team: `team_rqOUvfWKVJT8gPTJpLfUMzlx`
+- GitHub repo: `Neptune-Performance/natural-ball-player-portal` (transferred from `IamTrevorMay/natural-ball-player` by 2026-10-09; old URL redirects, repoId `1153932051`)
+- Vercel team: `team_rqOUvfWKVJT8gPTJpLfUMzlx` (mayday-media). TWO projects build this repo:
+  - **`natural-ball-player` `prj_MMPAWu9W12V5ljZCNn1ONbrKLvKr` = REAL PRODUCTION**: `www.thenatural-app.com`, `natural-ball-player.vercel.app`; holds `SUPABASE_SERVICE_ROLE_KEY`, `CRON_SECRET`, `TRACKMAN_FTP_*`, so the Vercel crons (trackman-sync, weekly-reminders, whoop-sync) only work here. The local `vercel` CLI is linked to it
+  - `nbp-portal` `prj_esGXWgj1jyLoC45LO4jAwX7u7jW8`: `nbp-portal.vercel.app` only, NO secrets (its `/api/*` crons 500 with "SUPABASE_SERVICE_ROLE_KEY not configured")
+- **Auto-deploy is broken since the repo transfer (2026-10-09):** both projects' git links still name the old owner and the push of `d6dcb20d` triggered nothing. Until the projects are re-linked (Vercel → Settings → Git) or the Vercel GitHub App is installed on Neptune-Performance, trigger a deploy by hand: `vercel api "/v13/deployments?teamId=team_rqOUvfWKVJT8gPTJpLfUMzlx" --method POST --input deploy.json` with `{"name":"natural-ball-player","project":"prj_MMPAWu9W12V5ljZCNn1ONbrKLvKr","target":"production","gitSource":{"type":"github","repoId":1153932051,"ref":"main"}}`, then poll `/v13/deployments/<id>`. The Vercel MCP token is NOT authorized for this team; use `vercel api`
 
 ## User Roles
 Stored as lowercase text in `users.role`: `admin`, `coach`, `player`
