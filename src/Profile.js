@@ -3510,7 +3510,7 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
               {/* #416: facility-wide recruiting board, staff only. Sits above the
                   school directory and its level chips, as Cordell asked. */}
               {(userRole === 'admin' || userRole === 'coach') && (
-                <RecruitingBoard onNavigateToProfile={onNavigateToProfile} highlightUserId={userId} />
+                <RecruitingBoard onNavigateToProfile={onNavigateToProfile} highlightUserId={userId} onChanged={(changedUserId) => { if (changedUserId === userId) fetchRecruitmentTeams(); }} />
               )}
 
               {/* ── School Directory ── */}

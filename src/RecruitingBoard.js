@@ -10,13 +10,20 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from './supabaseClient';
 import { readAllPages } from './readAllPages';
-import { ChevronDown, ChevronRight, Users, RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronRight, Users, RefreshCw, Check, X } from 'lucide-react';
 import { GRAD_YEAR_OPTIONS, RECRUITING_CLASSES, classForGradYear, schoolYearEnd } from './gradYear';
 import { formatUserError } from './errorMessage';
 
 const STATUS_ORDER = ['Offered', 'Talking To', 'Interested'];
 
-export default function RecruitingBoard({ onNavigateToProfile, highlightUserId }) {
+// #444: the two marks a coach can put on an athlete straight from the board.
+// Both write a recruitment_teams row (the same rows the profile's Recruitment
+// tab edits) so there is one source of truth: Committed takes the athlete off
+// the board exactly as it does when set on the profile.
+const BOARD_MARKS = ['Offered', 'Committed'];
+const NEW_SCHOOL = '__new__';
+
+export default function RecruitingBoard({ onNavigateToProfile, highlightUserId, onChanged }) {
   const [athletes, setAthletes] = useState([]);
   const [recruitment, setRecruitment] = useState([]);
   const [missingYear, setMissingYear] = useState(0);
@@ -26,6 +33,10 @@ export default function RecruitingBoard({ onNavigateToProfile, highlightUserId }
   const [open, setOpen] = useState(true);
   const [collapsed, setCollapsed] = useState({});
   const [savingId, setSavingId] = useState(null);
+  // #444: the in-progress mark, one athlete at a time:
+  // { userId, status, schoolId (existing row id | NEW_SCHOOL), schoolName }
+  const [marking, setMarking] = useState(null);
+  const [markSaving, setMarkSaving] = useState(false);
 
   const load = async () => {
     setLoading(true); setError('');
@@ -34,11 +45,11 @@ export default function RecruitingBoard({ onNavigateToProfile, highlightUserId }
         // #437: paged past the 1,000-row clamp.
         readAllPages(() => supabase
           .from('player_profiles')
-          .select('id, user_id, grade, grad_year, position, level, status, users!player_profiles_user_id_fkey(id, full_name, role)')
+          .select('id, user_id, grade, grad_year, position, level, status, offer_status, users!player_profiles_user_id_fkey(id, full_name, role)')
           .not('grad_year', 'is', null)
           .or('status.is.null,status.neq.Archived')
           .order('id')),
-        supabase.from('recruitment_teams').select('user_id, status, level, organization_name'),
+        supabase.from('recruitment_teams').select('id, user_id, status, level, organization_name'),
         supabase
           .from('player_profiles')
           .select('id', { count: 'exact', head: true })
@@ -108,6 +119,49 @@ export default function RecruitingBoard({ onNavigateToProfile, highlightUserId }
     }
   };
 
+  // #444: start a mark. Existing school rows are offered as the target; a
+  // school already at that status is skipped (nothing to change).
+  const startMark = (athlete, status) => {
+    if (!status) { setMarking(null); return; }
+    const rows = (recruitmentByUser.get(athlete.user_id) || []).filter(r => r.organization_name);
+    const first = rows.find(r => r.status !== status) || rows[0];
+    setMarking({ userId: athlete.user_id, status, schoolId: first ? first.id : NEW_SCHOOL, schoolName: '' });
+  };
+
+  const saveMark = async () => {
+    if (!marking) return;
+    const { userId, status, schoolId } = marking;
+    const schoolName = marking.schoolName.trim();
+    if (schoolId === NEW_SCHOOL && !schoolName) { alert('Name the school first.'); return; }
+    setMarkSaving(true);
+    try {
+      if (schoolId === NEW_SCHOOL) {
+        const { data, error } = await supabase
+          .from('recruitment_teams')
+          .insert({ user_id: userId, organization_name: schoolName, status })
+          .select('id, user_id, status, level, organization_name')
+          .single();
+        if (error) throw error;
+        setRecruitment(prev => [...prev, data]);
+      } else {
+        const { error } = await supabase
+          .from('recruitment_teams')
+          .update({ status, updated_at: new Date().toISOString() })
+          .eq('id', schoolId);
+        if (error) throw error;
+        setRecruitment(prev => prev.map(r => r.id === schoolId ? { ...r, status } : r));
+      }
+      setMarking(null);
+      // The profile's own Recruitment list (Profile.js) keeps separate state;
+      // let it refetch when the athlete on screen is the one we just marked.
+      onChanged?.(userId);
+    } catch (e) {
+      alert('Could not save: ' + formatUserError(e));
+    } finally {
+      setMarkSaving(false);
+    }
+  };
+
   const summarize = (userId) => {
     const rows = recruitmentByUser.get(userId) || [];
     if (rows.length === 0) return 'No schools yet';
@@ -153,7 +207,7 @@ export default function RecruitingBoard({ onNavigateToProfile, highlightUserId }
             <button type="button" onClick={load} className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1" title="Refresh">
               <RefreshCw size={12} /> Refresh
             </button>
-            <p className="text-xs text-gray-500 ml-auto">Athletes drop off once a school is marked <span className="font-medium">Committed</span> on their profile.</p>
+            <p className="text-xs text-gray-500 ml-auto">Use <span className="font-medium">Mark…</span> to record an offer or a commitment; Committed athletes drop off the board.</p>
           </div>
 
           {error && <p className="text-sm text-red-600 mb-3">{error}</p>}
@@ -188,34 +242,102 @@ export default function RecruitingBoard({ onNavigateToProfile, highlightUserId }
                   </button>
                   {!isCollapsed && (
                     <div className="divide-y divide-gray-100">
-                      {g.athletes.map(a => (
+                      {g.athletes.map(a => {
+                        const rows = recruitmentByUser.get(a.user_id) || [];
+                        const offers = rows.filter(r => r.status === 'Offered');
+                        const isMarking = marking?.userId === a.user_id;
+                        const schoolRows = rows.filter(r => r.organization_name);
+                        return (
                         <div
                           key={a.id}
-                          className={`flex flex-wrap items-center gap-x-4 gap-y-1 px-3 py-2 ${a.user_id === highlightUserId ? 'bg-blue-50' : ''}`}
+                          className={`px-3 py-2 ${a.user_id === highlightUserId ? 'bg-blue-50' : ''}`}
                         >
-                          <button
-                            type="button"
-                            onClick={() => onNavigateToProfile && onNavigateToProfile(a.user_id)}
-                            className="text-sm font-medium text-blue-700 hover:underline text-left"
-                          >
-                            {a.users?.full_name || 'Unnamed'}
-                          </button>
-                          <span className="text-xs text-gray-500">
-                            {[a.position, a.level && a.level !== 'No Level' ? a.level : null, a.grade?.trim()].filter(Boolean).join(' · ') || '—'}
-                          </span>
-                          <span className="text-xs text-gray-600 ml-auto">{summarize(a.user_id)}</span>
-                          <select
-                            value={a.grad_year || ''}
-                            disabled={savingId === a.id}
-                            onChange={(e) => setGradYear(a, e.target.value)}
-                            className="border border-gray-200 rounded px-1.5 py-0.5 text-xs bg-white text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            title="HS graduation year"
-                          >
-                            <option value="">— clear —</option>
-                            {GRAD_YEAR_OPTIONS.map(y => <option key={y} value={y}>{y}</option>)}
-                          </select>
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                            <button
+                              type="button"
+                              onClick={() => onNavigateToProfile && onNavigateToProfile(a.user_id)}
+                              className="text-sm font-medium text-blue-700 hover:underline text-left"
+                            >
+                              {a.users?.full_name || 'Unnamed'}
+                            </button>
+                            <span className="text-xs text-gray-500">
+                              {[a.position, a.level && a.level !== 'No Level' ? a.level : null, a.grade?.trim()].filter(Boolean).join(' · ') || '—'}
+                            </span>
+                            {/* #444: college offers stand out; the Naturals Select
+                                offer (Manage Athletes, #207) is shown read-only so a
+                                coach sees both without leaving the board. */}
+                            {offers.length > 0 && (
+                              <span className="text-xs font-medium text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full" title={offers.map(o => o.organization_name).filter(Boolean).join(', ')}>
+                                Offered · {offers.map(o => o.organization_name).filter(Boolean).join(', ') || offers.length}
+                              </span>
+                            )}
+                            {a.offer_status && (
+                              <span className="text-xs text-purple-800 bg-purple-100 px-2 py-0.5 rounded-full" title="Naturals Select offer status (edit in Manage Athletes)">
+                                Select: {a.offer_status}
+                              </span>
+                            )}
+                            <span className="text-xs text-gray-600 ml-auto">{summarize(a.user_id)}</span>
+                            <select
+                              value={isMarking ? marking.status : ''}
+                              disabled={markSaving}
+                              onChange={(e) => startMark(a, e.target.value)}
+                              className="border border-gray-200 rounded px-1.5 py-0.5 text-xs bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              title="Mark this athlete Offered or Committed"
+                            >
+                              <option value="">Mark…</option>
+                              {BOARD_MARKS.map(m => <option key={m} value={m}>{m}</option>)}
+                            </select>
+                            <select
+                              value={a.grad_year || ''}
+                              disabled={savingId === a.id}
+                              onChange={(e) => setGradYear(a, e.target.value)}
+                              className="border border-gray-200 rounded px-1.5 py-0.5 text-xs bg-white text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              title="HS graduation year"
+                            >
+                              <option value="">— clear —</option>
+                              {GRAD_YEAR_OPTIONS.map(y => <option key={y} value={y}>{y}</option>)}
+                            </select>
+                          </div>
+                          {isMarking && (
+                            <div className="mt-2 flex flex-wrap items-center gap-2 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2">
+                              <span className="text-xs font-medium text-gray-700">{marking.status} by</span>
+                              <select
+                                value={marking.schoolId}
+                                onChange={(e) => setMarking(m => ({ ...m, schoolId: e.target.value }))}
+                                className="border border-gray-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              >
+                                {schoolRows.map(r => (
+                                  <option key={r.id} value={r.id}>{r.organization_name}{r.status ? ` (${r.status})` : ''}</option>
+                                ))}
+                                <option value={NEW_SCHOOL}>New school…</option>
+                              </select>
+                              {marking.schoolId === NEW_SCHOOL && (
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  value={marking.schoolName}
+                                  onChange={(e) => setMarking(m => ({ ...m, schoolName: e.target.value }))}
+                                  onKeyDown={(e) => { if (e.key === 'Enter') saveMark(); if (e.key === 'Escape') setMarking(null); }}
+                                  placeholder="School name"
+                                  className="border border-gray-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[180px]"
+                                />
+                              )}
+                              {marking.status === 'Committed' && (
+                                <span className="text-xs text-gray-500">Committed removes them from this board.</span>
+                              )}
+                              <button type="button" onClick={saveMark} disabled={markSaving}
+                                className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded bg-blue-600 text-white text-xs font-medium hover:bg-blue-700 disabled:opacity-50">
+                                <Check size={12} /> {markSaving ? 'Saving…' : 'Save'}
+                              </button>
+                              <button type="button" onClick={() => setMarking(null)} disabled={markSaving}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded border border-gray-300 text-xs text-gray-700 hover:bg-white">
+                                <X size={12} /> Cancel
+                              </button>
+                            </div>
+                          )}
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
