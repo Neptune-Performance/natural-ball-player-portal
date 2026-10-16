@@ -908,6 +908,9 @@ function MainApp({ userRole, secondaryRole, userId, userName, userAvatar, onLogo
   // and stripped it, so read it before that happens: this initialiser runs on
   // MainApp's first mount, which is after the strip — hence the sessionStorage
   // hand-off below rather than re-reading window.location here.
+  // #452: which booking screen Schedule should open on ('lessons' | 'facility'),
+  // set by the private-lesson popup's two choices; cleared once Schedule reads it.
+  const [scheduleInitialMode, setScheduleInitialMode] = useState(null);
   const [profileInitialTab, setProfileInitialTab] = useState(() => {
     try {
       const v = sessionStorage.getItem('nbp_deeplink_tab');
@@ -1282,7 +1285,7 @@ function MainApp({ userRole, secondaryRole, userId, userName, userAvatar, onLogo
             {/* Athletes get the roster read-only: no profile links off teammate/coach cards. */}
             {currentView === 'team' && <MyTeam userId={userId} userRole={effectiveRole} initialTeamId={navigateTeamId} onNavigateToProfile={effectiveRole === 'player' ? null : openProfileFrom('team')} />}
             {currentView === 'training-groups' && (effectiveRole === 'admin' || effectiveRole === 'coach') && <TrainingGroups userId={userId} userRole={effectiveRole} onNavigateToProfile={openProfileFrom('training-groups')} />}
-            {currentView === 'schedule' && <Schedule userId={userId} userRole={effectiveRole} onMessageCoach={(conversationId) => { setMessagesInitialConversationId(conversationId); setCurrentView('messages'); }} />}
+            {currentView === 'schedule' && <Schedule userId={userId} userRole={effectiveRole} initialMode={scheduleInitialMode} onInitialModeHandled={() => setScheduleInitialMode(null)} onMessageCoach={(conversationId) => { setMessagesInitialConversationId(conversationId); setCurrentView('messages'); }} />}
             {currentView === 'knowledge' && <KnowledgeBase userId={userId} userRole={effectiveRole} />}
             {currentView === 'fields' && <Fields userId={userId} userRole={effectiveRole} />}
             {currentView === 'messages' && <Messages userId={userId} userRole={effectiveRole} initialConversationId={messagesInitialConversationId} onInitialConversationHandled={() => setMessagesInitialConversationId(null)} />}
@@ -1382,14 +1385,27 @@ function MainApp({ userRole, secondaryRole, userId, userName, userAvatar, onLogo
                 Staying consistent is key to development. Book a private lesson with your coach to keep
                 building on your progress.
               </p>
+              {/* #452: "Book a Session" used to drop athletes on their own My
+                  Schedule calendar, which has nothing to book. Two real
+                  destinations now. */}
+              <div className="mt-4 space-y-2">
+                <button
+                  onClick={() => { setShowLessonReminder(false); setScheduleInitialMode('lessons'); setCurrentView('schedule'); }}
+                  className="w-full text-left px-4 py-3 rounded-lg bg-teal-600 text-white hover:bg-teal-700 transition"
+                >
+                  <div className="font-semibold">Private lesson</div>
+                  <div className="text-xs text-teal-50">See every coach's open lesson times and reserve one.</div>
+                </button>
+                <button
+                  onClick={() => { setShowLessonReminder(false); setScheduleInitialMode('facility'); setCurrentView('schedule'); }}
+                  className="w-full text-left px-4 py-3 rounded-lg border border-teal-600 text-teal-800 hover:bg-teal-50 transition"
+                >
+                  <div className="font-semibold">Facility time</div>
+                  <div className="text-xs text-gray-600">NBP+ hour blocks, assessments, S&amp;C and cage rentals.</div>
+                </button>
+              </div>
             </div>
             <div className="border-t border-gray-200 px-6 py-4 flex gap-3 flex-shrink-0">
-              <button
-                onClick={() => { setShowLessonReminder(false); setCurrentView('schedule'); }}
-                className="flex-1 bg-teal-600 text-white py-2 rounded-lg font-medium hover:bg-teal-700 transition"
-              >
-                Book a Session
-              </button>
               <button
                 onClick={() => setShowLessonReminder(false)}
                 className="flex-1 border border-gray-300 text-gray-700 py-2 rounded-lg font-medium hover:bg-gray-50 transition"

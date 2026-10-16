@@ -114,7 +114,11 @@ function BookingWrap({ embedded, wide, signedIn, children }) {
 //               public mini-portal); also suppresses the welcome popup.
 //   prefill   — { name, email, phone } to pre-populate the booking form for a
 //               known (logged-in) public user.
-export default function PublicBookingPage({ embedded = false, prefill = null }) {
+//   facilityOnly — #452: list facility times only (NBP+ blocks, assessments,
+//                  cages). Used by the athlete Schedule → Facility tab: athletes
+//                  book coach lessons through the portal's own Reserve flow
+//                  (package gate, coach confirm), never this guest checkout.
+export default function PublicBookingPage({ embedded = false, prefill = null, facilityOnly = false }) {
   const params = new URLSearchParams(window.location.search);
   const returnedBooking = params.get('booking');
   const todayStr = fmtLocal(new Date());
@@ -122,7 +126,7 @@ export default function PublicBookingPage({ embedded = false, prefill = null }) 
   const [slots, setSlots] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-  const [filter, setFilter] = useState('all'); // all | resource | coach_session
+  const [filter, setFilter] = useState(facilityOnly ? 'resource' : 'all'); // all | resource | coach_session
   const [typeFilter, setTypeFilter] = useState([]); // highlighted facility booking_types; empty = All
   const [typeMenuOpen, setTypeMenuOpen] = useState(false);
   const typeMenuRef = useRef(null);
@@ -396,14 +400,14 @@ export default function PublicBookingPage({ embedded = false, prefill = null }) 
           </div>
           {/* Kind filter */}
           <div className="flex flex-wrap items-center gap-1.5">
-            <button
+            {!facilityOnly && <button
               onClick={() => setFilter('all')}
               className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
                 filter === 'all' ? 'bg-teal-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
               }`}
             >
               All
-            </button>
+            </button>}
             <div className="relative" ref={typeMenuRef}>
               <button
                 onClick={() => { setFilter('resource'); setTypeMenuOpen((o) => !o); }}
@@ -443,14 +447,14 @@ export default function PublicBookingPage({ embedded = false, prefill = null }) 
                 </div>
               )}
             </div>
-            <button
+            {!facilityOnly && <button
               onClick={() => setFilter('coach_session')}
               className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
                 filter === 'coach_session' ? 'bg-teal-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
               }`}
             >
               Private Lesson Availability
-            </button>
+            </button>}
           </div>
         </div>
 

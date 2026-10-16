@@ -21,6 +21,7 @@ import { CANCEL_REASON_ATHLETE } from './cancelReasons';
 // #277: per-occurrence RSVP (Going / Not going / Maybe) + coach roster & nudge.
 import { EventRsvpSection } from './EventRsvp';
 import { readAllPages } from './readAllPages';
+import PublicBookingPage from './PublicBookingPage'; // #452
 
 // #347 QA: every path that would wipe a whole facility series asks here first,
 // so the warning and its numbers can never differ between the Delete button on
@@ -344,8 +345,85 @@ async function fetchTeamFacilityEvents(teamIds, rangeStart, rangeEnd, startStr, 
   return [...rows.values()];
 }
 
-export default function Schedule({ userId, userRole, onMessageCoach }) {
+// Expands raw training_slots rows (masters, tombstones and #292 moved children)
+// into the occurrences shown by CoachSlotsWeekView for the week of
+// `selectedDate`, over a range that also covers the whole month. Shared by the
+// single-coach view (fetchCoachSlots) and the #452 all-coaches lessons view.
+function expandSlotsForWeekView(slots, selectedDate) {
+  // Expand range to cover the displayed week even if it spans month boundaries
+  const startOfWeek = new Date(selectedDate);
+  startOfWeek.setDate(selectedDate.getDate() - selectedDate.getDay());
+  startOfWeek.setHours(0, 0, 0, 0);
+  const endOfWeek = new Date(startOfWeek);
+  endOfWeek.setDate(startOfWeek.getDate() + 6);
+  const startOfMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
+  const endOfMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0);
+  const rangeStart = startOfWeek < startOfMonth ? startOfWeek : startOfMonth;
+  const rangeEnd = endOfWeek > endOfMonth ? endOfWeek : endOfMonth;
+  const startStr = fmtLocalDate(rangeStart);
+  const endStr = fmtLocalDate(rangeEnd);
+  const exceptionMap = buildSlotExceptionMap(slots);
+  const expandedSlots = [];
+  (slots || []).forEach(slot => {
+    if (slot.recurrence_parent_id) return;
+    if (slot.repeat_weekly) {
+      const slotStart = new Date(slot.slot_date + 'T00:00:00');
+      const endDate = slot.repeat_end_date ? new Date(slot.repeat_end_date + 'T00:00:00') : rangeEnd;
+      let current = new Date(slotStart);
+      let index = 0;
+      while (current <= endDate && current <= rangeEnd) {
+        const dateStr = fmtLocalDate(current);
+        // #292: ANY exception skips the date — tombstoned dates are gone,
+        // moved dates render from their child row below.
+        if (current >= rangeStart && !getSlotDateException(exceptionMap, slot.id, dateStr)) {
+          expandedSlots.push({ ...slot, slot_date: dateStr, _occurrence_index: index, _is_virtual: index > 0 });
+        }
+        current.setDate(current.getDate() + 7);
+        index++;
+      }
+    } else if (slot.slot_date >= startStr && slot.slot_date <= endStr && !getSlotDateException(exceptionMap, slot.id, slot.slot_date)) {
+      expandedSlots.push(slot);
+    }
+  });
+  // #292: moved occurrences are real sessions on their own date. Not
+  // _is_virtual — they're real rows, draggable again via the moved-child
+  // branch of onSlotDrop.
+  collectMovedSlots(slots).forEach(slot => {
+    if (slot.slot_date >= startStr && slot.slot_date <= endStr) {
+      expandedSlots.push(slot);
+    }
+  });
+  // Ensure the first occurrence visible in the current week is draggable (not an
+  // earlier-month occurrence that is outside the week view).
+  const weekStartStr = fmtLocalDate(startOfWeek);
+  const weekEndStr = fmtLocalDate(endOfWeek);
+  const firstRepeatSeen = new Set();
+  for (const es of expandedSlots) {
+    if (es.repeat_weekly && !firstRepeatSeen.has(es.id) && es.slot_date >= weekStartStr && es.slot_date <= weekEndStr) {
+      es._is_virtual = false;
+      firstRepeatSeen.add(es.id);
+    }
+  }
+  return { expandedSlots, startStr, endStr };
+}
+
+export default function Schedule({ userId, userRole, onMessageCoach, initialMode, onInitialModeHandled }) {
   const [view, setView] = useState(userRole === 'player' ? 'my-schedule' : 'facility');
+  // #452: athlete "Private Lessons" tab — every coach's open lesson slots for
+  // the week in one grid (Cordell: "the calendar showing all of the coaches
+  // lesson time slots"). Same slot expansion + Reserve flow as one coach.
+  const [lessonSlots, setLessonSlots] = useState([]);
+  const [lessonReservations, setLessonReservations] = useState([]);
+  const [lessonBookedCounts, setLessonBookedCounts] = useState({});
+  const [lessonsLoading, setLessonsLoading] = useState(false);
+  const [lessonCoachFilter, setLessonCoachFilter] = useState('all');
+  const [lessonSkillFilter, setLessonSkillFilter] = useState('All');
+  // #452: an athlete's Facility tab used to show only events they were
+  // already on, so it looked empty. It now opens on the bookable facility
+  // times (the same list as /book); 'mine' is the old calendar, kept because
+  // facility-event sign-ups and their own assigned events live there.
+  const [facilityMode, setFacilityMode] = useState('book');
+  const [bookingPrefill, setBookingPrefill] = useState(null);
   // #407: { coachId, coachName, date, startTime, title } for the session the
   // athlete wants to message their coach about; null when the modal is closed.
   const [messageCoachTarget, setMessageCoachTarget] = useState(null);
@@ -367,6 +445,16 @@ export default function Schedule({ userId, userRole, onMessageCoach }) {
     roleAppliedRef.current = true;
     if (userRole === 'player') { setView('my-schedule'); setViewMode('month'); }
   }, [userRole]);
+  // #452: App's "Book a Session" picker opens Schedule straight on Private
+  // Lessons ('lessons') or bookable facility time ('facility'). Declared after
+  // the role effect so, when both fire in the same commit, this one wins.
+  useEffect(() => {
+    if (!initialMode || !userRole) return;
+    if (initialMode === 'lessons') setView('lessons');
+    else if (initialMode === 'facility') { setView('facility'); setFacilityMode('book'); setSelectedCoach(null); }
+    onInitialModeHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialMode, userRole]);
   const [teams, setTeams] = useState([]);
   const [players, setPlayers] = useState([]);
   const [selectedTeam, setSelectedTeam] = useState(null);
@@ -499,6 +587,23 @@ export default function Schedule({ userId, userRole, onMessageCoach }) {
       fetchMyScheduleEvents();
     }
   }, [view, selectedDate]);
+
+  // #452
+  useEffect(() => {
+    if (view !== 'lessons') return;
+    fetchLessonSlots();
+    if (coaches.length === 0) fetchCoaches();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, selectedDate]);
+
+  // #452: name/email/phone for the embedded facility booking form, so an
+  // athlete is not asked to type who they are.
+  useEffect(() => {
+    if (userRole !== 'player' || view !== 'facility' || bookingPrefill) return;
+    supabase.from('users').select('full_name, email, phone').eq('id', userId).maybeSingle()
+      .then(({ data }) => setBookingPrefill({ name: data?.full_name || '', email: data?.email || '', phone: data?.phone || '' }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userRole, view, userId]);
 
   useEffect(() => {
     // QA 2026-08-15: `userRole` must be resolved before this runs. fetchFacilityEvents
@@ -1323,63 +1428,48 @@ export default function Schedule({ userId, userRole, onMessageCoach }) {
     setEventPublicBookings(pubByEvent);
   };
 
-  const fetchCoachSlots = async (coachId) => {
-    // Expand range to cover the displayed week even if it spans month boundaries
+  // #452: every coach's slots for the Private Lessons week. 843 training_slots
+  // rows on 2026-10-16, so this pages past PostgREST's silent 1,000-row cap.
+  const fetchLessonSlots = async () => {
+    setLessonsLoading(true);
+    const { rows: slots, error: slotErr } = await readAllPages(() =>
+      supabase.from('training_slots').select('*').order('id'));
+    if (slotErr) console.error('fetchLessonSlots: training_slots query failed:', slotErr);
+    const { expandedSlots, startStr, endStr } = expandSlotsForWeekView(slots, selectedDate);
     const startOfWeek = new Date(selectedDate);
     startOfWeek.setDate(selectedDate.getDate() - selectedDate.getDay());
-    startOfWeek.setHours(0, 0, 0, 0);
     const endOfWeek = new Date(startOfWeek);
     endOfWeek.setDate(startOfWeek.getDate() + 6);
-    const startOfMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
-    const endOfMonth = new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0);
-    const rangeStart = startOfWeek < startOfMonth ? startOfWeek : startOfMonth;
-    const rangeEnd = endOfWeek > endOfMonth ? endOfWeek : endOfMonth;
-    const startStr = fmtLocalDate(rangeStart);
-    const endStr = fmtLocalDate(rangeEnd);
+    const weekStart = fmtLocalDate(startOfWeek);
+    const weekEnd = fmtLocalDate(endOfWeek);
+    const weekSlots = expandedSlots.filter(sl => sl.slot_date >= weekStart && sl.slot_date <= weekEnd);
+    setLessonSlots(weekSlots);
+    const slotIds = [...new Set(weekSlots.map(sl => sl.id))];
+    if (slotIds.length > 0) {
+      const [resResult, countResult] = await Promise.all([
+        // RLS returns only this athlete's own reservations — that is all the
+        // grid needs to show "Pending" / "Confirmed" on their own bookings.
+        supabase.from('slot_reservations').select('*').eq('player_id', userId).in('slot_id', slotIds).gte('slot_date', startStr).lte('slot_date', endStr),
+        // #428: capacity must come from the SECURITY DEFINER RPC.
+        supabase.rpc('slot_booked_counts', { p_slot_ids: slotIds, p_start: weekStart, p_end: weekEnd }),
+      ]);
+      if (resResult.error) console.error('fetchLessonSlots: slot_reservations failed:', resResult.error);
+      if (countResult.error) console.error('fetchLessonSlots: slot_booked_counts failed:', countResult.error);
+      setLessonReservations(resResult.data || []);
+      const counts = {};
+      (countResult.data || []).forEach(c => { counts[`${c.slot_id}|${c.slot_date}`] = c.booked; });
+      setLessonBookedCounts(counts);
+    } else {
+      setLessonReservations([]);
+      setLessonBookedCounts({});
+    }
+    setLessonsLoading(false);
+  };
+
+  const fetchCoachSlots = async (coachId) => {
     const { data: slots, error: slotErr } = await supabase.from('training_slots').select('*').eq('coach_id', coachId);
     if (slotErr) console.error('Error fetching training slots:', slotErr);
-    const exceptionMap = buildSlotExceptionMap(slots);
-    const expandedSlots = [];
-    (slots || []).forEach(slot => {
-      if (slot.recurrence_parent_id) return;
-      if (slot.repeat_weekly) {
-        const slotStart = new Date(slot.slot_date + 'T00:00:00');
-        const endDate = slot.repeat_end_date ? new Date(slot.repeat_end_date + 'T00:00:00') : rangeEnd;
-        let current = new Date(slotStart);
-        let index = 0;
-        while (current <= endDate && current <= rangeEnd) {
-          const dateStr = fmtLocalDate(current);
-          // #292: ANY exception skips the date — tombstoned dates are gone,
-          // moved dates render from their child row below.
-          if (current >= rangeStart && !getSlotDateException(exceptionMap, slot.id, dateStr)) {
-            expandedSlots.push({ ...slot, slot_date: dateStr, _occurrence_index: index, _is_virtual: index > 0 });
-          }
-          current.setDate(current.getDate() + 7);
-          index++;
-        }
-      } else if (slot.slot_date >= startStr && slot.slot_date <= endStr && !getSlotDateException(exceptionMap, slot.id, slot.slot_date)) {
-        expandedSlots.push(slot);
-      }
-    });
-    // #292: moved occurrences are real sessions on their own date. Not
-    // _is_virtual — they're real rows, draggable again via the moved-child
-    // branch of onSlotDrop.
-    collectMovedSlots(slots).forEach(slot => {
-      if (slot.slot_date >= startStr && slot.slot_date <= endStr) {
-        expandedSlots.push(slot);
-      }
-    });
-    // Ensure the first occurrence visible in the current week is draggable (not an
-    // earlier-month occurrence that is outside the week view).
-    const weekStartStr = fmtLocalDate(startOfWeek);
-    const weekEndStr = fmtLocalDate(endOfWeek);
-    const firstRepeatSeen = new Set();
-    for (const es of expandedSlots) {
-      if (es.repeat_weekly && !firstRepeatSeen.has(es.id) && es.slot_date >= weekStartStr && es.slot_date <= weekEndStr) {
-        es._is_virtual = false;
-        firstRepeatSeen.add(es.id);
-      }
-    }
+    const { expandedSlots, startStr, endStr } = expandSlotsForWeekView(slots, selectedDate);
     setCoachSlots(expandedSlots);
     const slotIds = (slots || []).map(s => s.id);
     if (slotIds.length > 0) {
@@ -2008,8 +2098,18 @@ export default function Schedule({ userId, userRole, onMessageCoach }) {
                 <CalendarIcon size={18} />
                 <span>My Schedule</span>
               </button>
+              {/* #452 */}
               <button
-                onClick={() => { setView('facility'); setSelectedCoach(null); }}
+                onClick={() => { setView('lessons'); setSelectedCoach(null); }}
+                className={`px-4 py-2 rounded-lg font-medium transition flex items-center space-x-2 ${
+                  view === 'lessons' ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                <Dumbbell size={18} />
+                <span>Private Lessons</span>
+              </button>
+              <button
+                onClick={() => { setView('facility'); setFacilityMode('book'); setSelectedCoach(null); }}
                 className={`px-4 py-2 rounded-lg font-medium transition flex items-center space-x-2 ${
                   view === 'facility' ? 'bg-teal-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
@@ -2145,7 +2245,103 @@ export default function Schedule({ userId, userRole, onMessageCoach }) {
       )}
 
       {/* Facility View */}
-      {view === 'facility' && (
+      {/* #452: Private Lessons — every coach's open lesson slots for the week. */}
+      {view === 'lessons' && (() => {
+        const coachesById = Object.fromEntries(coaches.map(c => [c.id, c]));
+        const coachIdsWithSlots = new Set(lessonSlots.map(sl => sl.coach_id));
+        const coachOptions = coaches.filter(c => coachIdsWithSlots.has(c.id));
+        const visibleSlots = lessonSlots.filter(sl => {
+          if (lessonCoachFilter !== 'all' && sl.coach_id !== lessonCoachFilter) return false;
+          if (lessonSkillFilter !== 'All' && !(coachesById[sl.coach_id]?.skills || []).includes(lessonSkillFilter)) return false;
+          return true;
+        }).sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
+        return (
+          <div className="bg-white rounded-lg shadow">
+            <div className="border-b border-gray-200 p-6 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">Book a Private Lesson</h3>
+                  <p className="text-sm text-gray-500">Open lesson times for every coach. Tap Reserve to request a session.</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={lessonCoachFilter}
+                    onChange={(e) => setLessonCoachFilter(e.target.value)}
+                    className="px-2 py-1.5 border border-gray-300 rounded text-sm bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    aria-label="Filter by coach"
+                  >
+                    <option value="all">All coaches</option>
+                    {coachOptions.map(c => <option key={c.id} value={c.id}>{c.full_name}</option>)}
+                  </select>
+                  <select
+                    value={lessonSkillFilter}
+                    onChange={(e) => setLessonSkillFilter(e.target.value)}
+                    className="px-2 py-1.5 border border-gray-300 rounded text-sm bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    aria-label="Filter by skill"
+                  >
+                    <option value="All">All skills</option>
+                    {COACH_SKILL_OPTIONS.map(sk => <option key={sk} value={sk}>{sk}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <button onClick={() => { const d = new Date(selectedDate); d.setDate(d.getDate() - 7); setSelectedDate(d); }} className="p-2 hover:bg-gray-100 rounded-lg transition" aria-label="Previous week"><ChevronLeft size={20} /></button>
+                <h3 className="text-xl font-semibold text-gray-900">{getWeekRangeLabel(selectedDate)}</h3>
+                <button onClick={() => { const d = new Date(selectedDate); d.setDate(d.getDate() + 7); setSelectedDate(d); }} className="p-2 hover:bg-gray-100 rounded-lg transition" aria-label="Next week"><ChevronRight size={20} /></button>
+              </div>
+            </div>
+            <div className="p-6">
+              {lessonsLoading && lessonSlots.length === 0 ? (
+                <div className="py-12 text-center text-gray-500">Loading lesson times…</div>
+              ) : (
+                <CoachSlotsWeekView
+                  selectedDate={selectedDate}
+                  slots={visibleSlots}
+                  reservations={lessonReservations}
+                  bookedCounts={lessonBookedCounts}
+                  coach={null}
+                  coachesById={coachesById}
+                  userId={userId}
+                  userRole={userRole}
+                  canManage={false}
+                  onAddSlot={() => {}}
+                  onReserve={(slot) => setShowReserveSlot(slot)}
+                  onMessageCoach={(target) => setMessageCoachTarget(target)}
+                />
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* #452: athlete Facility tab — bookable facility time first. */}
+      {view === 'facility' && userRole === 'player' && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setFacilityMode('book')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${facilityMode === 'book' ? 'bg-teal-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+          >
+            Book facility time
+          </button>
+          <button
+            onClick={() => setFacilityMode('mine')}
+            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${facilityMode === 'mine' ? 'bg-teal-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+          >
+            My facility events
+          </button>
+        </div>
+      )}
+      {view === 'facility' && userRole === 'player' && facilityMode === 'book' && (
+        <div className="bg-white rounded-lg shadow p-4 sm:p-6">
+          <p className="text-sm text-gray-600 mb-4">
+            NBP+ hour blocks, assessments, strength &amp; conditioning and cage time. For a one-on-one session with a coach, use{' '}
+            <button type="button" onClick={() => setView('lessons')} className="text-indigo-600 font-medium hover:underline">Private Lessons</button>.
+          </p>
+          <PublicBookingPage embedded facilityOnly prefill={bookingPrefill} key={bookingPrefill ? 'prefilled' : 'blank'} />
+        </div>
+      )}
+
+      {view === 'facility' && !(userRole === 'player' && facilityMode === 'book') && (
         <div className="bg-white rounded-lg shadow relative">
           {/* Coach Drawer (pop-out) */}
           {coachesDrawerOpen && (
@@ -2993,9 +3189,9 @@ export default function Schedule({ userId, userRole, onMessageCoach }) {
       {showReserveSlot && (
         <ReserveSlotModal
           slot={showReserveSlot}
-          coach={selectedCoach}
+          coach={selectedCoach || coaches.find(c => c.id === showReserveSlot.coach_id) || null}
           onClose={() => setShowReserveSlot(null)}
-          onSuccess={() => { setShowReserveSlot(null); if (selectedCoach) fetchCoachSlots(selectedCoach.id); }}
+          onSuccess={() => { setShowReserveSlot(null); if (selectedCoach) fetchCoachSlots(selectedCoach.id); if (view === 'lessons') fetchLessonSlots(); }}
         />
       )}
       {/* #276: coach confirming a booking that puts the athlete over their
@@ -8681,18 +8877,20 @@ const ATTENDANCE_OPTIONS = [
   { value: 'cancelled', label: 'Cancelled', cls: 'bg-gray-500' },
 ];
 
-function CoachSlotsWeekView({ selectedDate, slots, reservations, publicBookings = [], bookedCounts = {}, coach, userId, userRole, canManage, onAddSlot, onReserve, onConfirm, onDecline, onMarkAttendance, selecting, selectedIds, onToggleSelect, onEventContextMenu, onSlotDrop, onMessageCoach }) {
+// #452: `coachesById` switches this to a multi-coach grid (the athlete Private
+// Lessons tab): each card resolves its own coach from slot.coach_id and shows
+// the coach's name. Without it, `coach` is the single coach, as before.
+function CoachSlotsWeekView({ selectedDate, slots, reservations, publicBookings = [], bookedCounts = {}, coach, coachesById = null, userId, userRole, canManage, onAddSlot, onReserve, onConfirm, onDecline, onMarkAttendance, selecting, selectedIds, onToggleSelect, onEventContextMenu, onSlotDrop, onMessageCoach }) {
   const startOfWeek = new Date(selectedDate);
   startOfWeek.setDate(selectedDate.getDate() - selectedDate.getDay());
   startOfWeek.setHours(0, 0, 0, 0);
   const weekDays = [];
   for (let i = 0; i < 7; i++) { const d = new Date(startOfWeek); d.setDate(startOfWeek.getDate() + i); weekDays.push(d); }
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const isOwnSlots = coach.id === userId;
+  const coachFor = (slot) => (coachesById ? (coachesById[slot.coach_id] || { id: slot.coach_id, full_name: 'Coach' }) : coach);
   // Any staff member can SEE who's booked in any coach's slots; managing the
   // reservations (confirm/decline/attendance) stays with the slot's coach + admin.
   const isStaffViewer = userRole === 'admin' || userRole === 'coach';
-  const canManageRes = isOwnSlots || userRole === 'admin';
   // Player bookings close 12h before the session starts (mirrors the #233 cancel cutoff).
   const RESERVE_CUTOFF_MS = 12 * 60 * 60 * 1000;
   const isBookingClosed = (slot, dateStr) =>
@@ -8760,6 +8958,9 @@ function CoachSlotsWeekView({ selectedDate, slots, reservations, publicBookings 
                   const userRes = slotRes.find(r => r.player_id === userId);
                   const endTime = getEndTime(slot.start_time, slot.duration_minutes);
                   const isSel = selecting && selectedIds && selectedIds.has(String(slot.id));
+                  const slotCoach = coachFor(slot);
+                  const isOwnSlots = slotCoach.id === userId;
+                  const canManageRes = isOwnSlots || userRole === 'admin';
                   return (
                     <div
                       key={`${slot.id}-${si}`}
@@ -8780,6 +8981,7 @@ function CoachSlotsWeekView({ selectedDate, slots, reservations, publicBookings 
                     >
                       <div className="font-semibold text-gray-900">{formatTime(slot.start_time)} - {formatTime(endTime)}</div>
                       <div className="text-gray-500">{slot.duration_minutes} min</div>
+                      {coachesById && <div className="font-medium text-indigo-700 mt-0.5 truncate">{slotCoach.full_name}</div>}
                       {slot.notes && <div className="text-gray-500 mt-1 truncate">{slot.notes}</div>}
                       {isStaffViewer && slotRes.map(res => (
                         <div key={res.id} className="mt-2 p-2 bg-white rounded border">
@@ -8830,7 +9032,7 @@ function CoachSlotsWeekView({ selectedDate, slots, reservations, publicBookings 
                           (sick, running late, need to reschedule) right from the card. */}
                       {userRole === 'player' && userRes && (userRes.status === 'pending' || userRes.status === 'confirmed') && onMessageCoach && (
                         <button
-                          onClick={() => onMessageCoach({ coachId: slot.coach_id || coach.id, coachName: coach.full_name, date: dateStr, startTime: slot.start_time, title: slot.notes })}
+                          onClick={() => onMessageCoach({ coachId: slot.coach_id || slotCoach.id, coachName: slotCoach.full_name, date: dateStr, startTime: slot.start_time, title: slot.notes })}
                           className="mt-1.5 w-full border border-teal-600 text-teal-700 py-1 rounded text-xs font-medium hover:bg-teal-50 transition touch-manipulation"
                         >
                           Message coach
