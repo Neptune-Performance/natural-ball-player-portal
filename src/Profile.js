@@ -47,9 +47,9 @@ const PROFILE_TABS = [
   // #226: Programming was merged into Schedule (they function the same). The
   // Schedule tab now renders the calendar followed by the programming list.
   { key: 'schedule', label: 'Schedule', roles: ['admin', 'coach'] },
-  { key: 'trackman', label: 'Trackman' },
-  { key: 'whoop', label: 'Whoop', roles: ['admin', 'coach'] },
-  { key: 'hittrax', label: 'Hittrax' },
+  // #450: Trackman, HitTrax, WHOOP and Blast Motion live under one
+  // "Technology" tab with a sub-nav (TECH_SUB_TABS), like Health and Records.
+  { key: 'technology', label: 'Technology' },
   // #421: athlete-uploaded external stats (GameChanger / Perfect Game /
   // MaxPreps / PBR / other). No role gate: the athlete manages their own,
   // staff manage anyone's, and RLS on external_stats enforces both.
@@ -77,8 +77,8 @@ const PROFILE_TABS = [
 // it drifted twice — tabs gained real content but were never removed from the
 // list, so "Coming Soon" was drawn directly above their content. Add a key here
 // the moment you add its content block, and nowhere else.
-// 'hittrax' is deliberately NOT in this list: it has no content block yet, so
-// "Coming Soon" is the whole of that tab and is correct.
+// #450: 'trackman' and 'whoop' moved under 'technology'. HitTrax and Blast
+// Motion are Technology sub-tabs with their own "Coming soon" placeholder.
 // #376: 'attendance' and 'practice_stats' were removed from this list at the
 // same time as they were removed from PROFILE_TABS. Their content now hangs off
 // activeProfileTab === 'records' instead, so neither key can ever be the active
@@ -88,7 +88,7 @@ const PROFILE_TABS = [
 // blank page, and removing the content without removing them would have shown
 // "Coming Soon" over nothing. Both go, together.
 const PROFILE_TABS_WITH_CONTENT = [
-  'general', 'athletes', 'schedule', 'trackman', 'whoop', 'stats', 'health',
+  'general', 'athletes', 'schedule', 'technology', 'stats', 'health',
   'recruitment', 'records', 'communication',
 ];
 
@@ -270,6 +270,19 @@ const RECORDS_SUB_TABS = [
   { key: 'practice_stats', label: 'Practice Stats', staffOnly: true, playerSelf: true },
 ];
 
+// #450: the sections inside the "Technology" tab, in sub-nav order (the order
+// Cordell listed them). WHOOP used to be a top-level tab with roles
+// ['admin','coach'] plus a player-on-own-profile exception (#154). The tab bar
+// already hides every tab from a player looking at someone else, so that pair
+// reduces to "everyone who can open the Technology tab" and needs no gate here.
+// `comingSoon` sections have no integration yet and render a placeholder.
+const TECH_SUB_TABS = [
+  { key: 'trackman', label: 'Trackman' },
+  { key: 'hittrax', label: 'HitTrax', comingSoon: true },
+  { key: 'whoop', label: 'WHOOP' },
+  { key: 'blast', label: 'Blast Motion', comingSoon: true },
+];
+
 // #369: the sections that live inside the merged "Health" tab, in sub-nav order.
 // Assessment moved to Records (#376). Marek (bloodwork, staff 18+) and
 // Mental Training (modal, all roles) added here per #376.
@@ -392,6 +405,9 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
   // #369: which section is showing inside the merged "Health" tab, and which
   // routine type is picked in the Arm Care drop-down ('' = nothing picked yet).
   const [healthSubTab, setHealthSubTab] = useState('armcare');
+  // #450: which section is showing inside the "Technology" tab.
+  const [techSubTab, setTechSubTab] = useState('trackman');
+  const activeTechSubTab = TECH_SUB_TABS.some(sub => sub.key === techSubTab) ? techSubTab : 'trackman';
   const [routineTypeChoice, setRoutineTypeChoice] = useState('');
 
   // Mental Training pop-up (Major League Mindset).
@@ -597,6 +613,12 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
       } else if (['armcare', 'pt', 'marek'].includes(initialTab)) {
         setActiveProfileTab('health');
         setHealthSubTab(initialTab);
+      // #450: the old top-level keys (the WHOOP OAuth return and the WHOOP
+      // nudge in the bell both deep-link 'whoop') open Technology on that
+      // section.
+      } else if (TECH_SUB_TABS.some(sub => sub.key === initialTab)) {
+        setActiveProfileTab('technology');
+        setTechSubTab(initialTab);
       } else {
         setActiveProfileTab(initialTab);
       }
@@ -2509,9 +2531,9 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
                 // merged per #226) on their OWN profile so they can see what's
                 // programmed for them (#153). Staff keep it via tab.roles below.
                 if (tab.key === 'schedule' && userRole === 'player') return loggedInUserId === userId;
-                // Players can connect their OWN WHOOP on their own profile (#154); the
-                // edge function scopes them to self-access only.
-                if (tab.key === 'whoop' && userRole === 'player') return loggedInUserId === userId;
+                // #450: WHOOP (#154: a player connects their OWN WHOOP on their own
+                // profile) now lives inside Technology, which has no role gate; the
+                // player-on-someone-else case is already refused at the top.
                 // Players can view their OWN recruitment entries (#216) — subject to the 15+ gate above.
                 if (tab.key === 'recruitment' && userRole === 'player') return loggedInUserId === userId;
                 // #376: the Practice Stats exception used to sit here — "a player
@@ -2596,6 +2618,35 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
             </nav>
           )}
 
+          {/* #450: Technology sub-nav, same lighter styling as Records/Health. */}
+          {activeProfileTab === 'technology' && (
+            <nav className="flex flex-wrap gap-1.5 mb-5 min-w-0">
+              {TECH_SUB_TABS.map(sub => (
+                <button
+                  key={sub.key}
+                  type="button"
+                  onClick={() => setTechSubTab(sub.key)}
+                  className={`min-h-[36px] px-3 py-1.5 rounded-full border text-xs font-medium transition whitespace-nowrap touch-manipulation ${
+                    activeTechSubTab === sub.key
+                      ? 'bg-white border-blue-300 text-blue-700 shadow-sm'
+                      : 'bg-transparent border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-900'
+                  }`}
+                >
+                  {sub.label}
+                </button>
+              ))}
+            </nav>
+          )}
+
+          {activeProfileTab === 'technology' && TECH_SUB_TABS.find(sub => sub.key === activeTechSubTab)?.comingSoon && (
+            <div className="py-12 text-center">
+              <p className="text-gray-700 text-lg font-medium">
+                {TECH_SUB_TABS.find(sub => sub.key === activeTechSubTab).label} is coming soon
+              </p>
+              <p className="text-gray-500 text-sm mt-1">Session data will show here once the integration is connected.</p>
+            </div>
+          )}
+
           {!PROFILE_TABS_WITH_CONTENT.includes(activeProfileTab) && (
             <div className="py-12 text-center">
               <p className="text-gray-500 text-lg">Coming Soon</p>
@@ -2648,11 +2699,11 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
             </div>
           )}
 
-          {activeProfileTab === 'whoop' && (
+          {activeProfileTab === 'technology' && activeTechSubTab === 'whoop' && (
             <WhoopTab userId={userId} userRole={userRole} loggedInUserId={loggedInUserId} athleteName={userData?.full_name} />
           )}
 
-          {activeProfileTab === 'trackman' && (
+          {activeProfileTab === 'technology' && activeTechSubTab === 'trackman' && (
             <TrackmanTab userId={userId} userRole={userRole} loggedInUserId={loggedInUserId} />
           )}
 
