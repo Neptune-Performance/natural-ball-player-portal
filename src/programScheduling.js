@@ -25,6 +25,9 @@ export const PROGRAM_CALENDAR_CATEGORY = {
   sc: 'strength',
   throwing: 'pitching',
   hitting: 'hitting',
+  // #454: its own category so a rehab plan does not satisfy the #436
+  // Lifting/Mobility requirement.
+  pt: 'pt',
 };
 
 const BATCH = 500;

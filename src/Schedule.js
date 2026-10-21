@@ -3285,6 +3285,7 @@ function MonthView({ selectedDate, events, onDateClick, hoveredDate, setHoveredD
         case 'recovery': return 'bg-purple-500 text-white border-purple-600';
         case 'warmup': return 'bg-purple-500 text-white border-purple-600';
         case 'mobility': return 'bg-purple-500 text-white border-purple-600';
+        case 'pt': return 'bg-rose-500 text-white border-rose-600'; // #454
         case 'conditioning': return 'bg-yellow-500 text-white border-yellow-600';
         default: return 'bg-gray-500 text-white border-gray-600';
       }
@@ -3560,6 +3561,7 @@ function EventCard({ event, compact, eventColorFn, onClick, draggable, onContext
         case 'recovery': return 'border-l-4 border-purple-600 bg-purple-100';
         case 'warmup': return 'border-l-4 border-purple-600 bg-purple-100';
         case 'mobility': return 'border-l-4 border-purple-600 bg-purple-100';
+        case 'pt': return 'border-l-4 border-rose-600 bg-rose-100';
         case 'conditioning': return 'border-l-4 border-yellow-600 bg-yellow-100';
         default: return 'border-l-4 border-gray-600 bg-gray-100';
       }
@@ -6601,6 +6603,7 @@ function EventDetailModal({ event, onClose, onDelete, onUpdate, userRole, userId
         case 'recovery': return 'from-purple-50 to-purple-100 border-purple-200';
         case 'warmup': return 'from-purple-50 to-purple-100 border-purple-200';
         case 'mobility': return 'from-purple-50 to-purple-100 border-purple-200';
+        case 'pt': return 'from-rose-50 to-rose-100 border-rose-200';
         case 'conditioning': return 'from-yellow-50 to-yellow-100 border-yellow-200';
         default: return 'from-gray-50 to-gray-100 border-gray-200';
       }

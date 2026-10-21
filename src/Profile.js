@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import PtProgressChecks from './PtProgressChecks';
 import { supabase } from './supabaseClient';
 import { fetchUserDirectory, readDirectory } from './userDirectory';
 import { Mail, Phone, Ruler, Scale, Edit2, Save, X, Shirt, Camera, Plus, Trash2, Instagram, Twitter, Building2, ArrowLeft, CheckCircle, XCircle, ShoppingBag, ExternalLink, Users, FileText, ClipboardList, ChevronDown, ChevronUp, Eye, Calendar, ChevronLeft, ChevronRight, Paperclip, Search, AlertTriangle } from 'lucide-react';
@@ -3285,6 +3286,13 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
                   Powered by NBP × LW Physical Therapy. Logging visits helps track development, recovery, and onboarding history.
                 </p>
               </div>
+
+              {/* #454: PT Recovery Engine progress checks (staff log, athlete reads own) */}
+              <PtProgressChecks
+                playerId={userId}
+                canEdit={userRole === 'admin' || userRole === 'coach'}
+                currentUserId={loggedInUserId}
+              />
 
               {/* Add Visit Button */}
               {(userRole === 'admin' || userRole === 'coach') && editingPtVisitId !== 'new' && (
