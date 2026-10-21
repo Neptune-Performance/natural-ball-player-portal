@@ -853,30 +853,19 @@ export default function Schedule({ userId, userRole, onMessageCoach, initialMode
       }
     } else {
       const { data: myRes } = await supabase.from('slot_reservations').select('*, training_slots(*)').eq('player_id', userId).eq('status', 'confirmed');
+      // #455: a reservation is for ONE occurrence (r.slot_date). Expanding
+      // the whole weekly series per reservation drew every Friday once per
+      // booking — three bookings on a series = three copies each week, plus
+      // sessions on weeks the athlete never booked. A reservation repointed
+      // at a moved child (#292) carries the child's new date, so this covers
+      // that case too; tombstone joins (is_exception=true) stay excluded.
       (myRes || []).forEach(r => {
         const slot = r.training_slots;
         if (!slot) return;
-        if (slot.repeat_weekly && !slot.recurrence_parent_id) {
-          const slotStart = new Date(slot.slot_date + 'T00:00:00');
-          const endDate = slot.repeat_end_date ? new Date(slot.repeat_end_date + 'T00:00:00') : rangeEnd;
-          let current = new Date(slotStart);
-          let index = 0;
-          while (current <= rangeEnd && current <= endDate) {
-            const occStr = fmtLocalDate(current);
-            if (occStr >= startStr && occStr <= endStr) {
-              slotEvents.push({ ...slot, event_date: occStr, event_type: 'training_slot', title: slot.notes || 'Training Session', _is_slot: true, _occurrence_index: index, _is_virtual: index > 0 });
-            }
-            current.setDate(current.getDate() + 7);
-            index++;
-            if (index > 500) break;
-          }
-        } else if ((!slot.recurrence_parent_id || slot.is_exception === false) && slot.slot_date >= startStr && slot.slot_date <= endStr) {
-          // #292: a reservation repointed at a moved occurrence joins to the
-          // child row (recurrence_parent_id set, is_exception=false) — render
-          // it as a single session on its new date. Tombstone joins
-          // (is_exception=true) stay excluded.
-          slotEvents.push({ ...slot, event_date: slot.slot_date, event_type: 'training_slot', title: slot.notes || 'Training Session', _is_slot: true });
-        }
+        if (slot.recurrence_parent_id && slot.is_exception !== false) return;
+        const occStr = r.slot_date || slot.slot_date;
+        if (occStr < startStr || occStr > endStr) return;
+        slotEvents.push({ ...slot, event_date: occStr, event_type: 'training_slot', title: slot.notes || 'Training Session', _is_slot: true, _reservation_id: r.id });
       });
     }
 

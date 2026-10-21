@@ -2076,7 +2076,8 @@ function AdminDashboard({ userId, userRole, setCurrentView }) {
 
     const confirmed = allReservations.filter(r =>
       r.status === 'confirmed' &&
-      todaySlots.some(s => s.id === r.slot_id && (r.slot_date === today || s.slot_date === today || s.repeat_weekly))
+      // #455: a weekly series has a reservation per date; only today's count.
+      todaySlots.some(s => s.id === r.slot_id) && (r.slot_date ? r.slot_date === today : true)
     );
     const confirmedWithSlot = confirmed.map(r => {
       const slot = todaySlots.find(s => s.id === r.slot_id);
@@ -2085,7 +2086,7 @@ function AdminDashboard({ userId, userRole, setCurrentView }) {
     setTodaySessions(confirmedWithSlot);
 
     const open = todaySlots.filter(slot => {
-      const slotRes = allReservations.filter(r => r.slot_id === slot.id && r.status === 'confirmed');
+      const slotRes = allReservations.filter(r => r.slot_id === slot.id && r.status === 'confirmed' && (!r.slot_date || r.slot_date === today));
       return slotRes.length < (slot.max_players || 1);
     });
     setOpenSlots(open);
