@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 import { readAllPages } from './readAllPages';
-import { Dumbbell, Utensils, Zap, Target, FolderOpen, Wand2, Sparkles, Link2 } from 'lucide-react';
+import { Dumbbell, Utensils, Zap, Target, FolderOpen, Wand2, Sparkles, Link2, AlertTriangle, Video } from 'lucide-react';
 import { TrainingTab, MealsTab } from './CoachTools';
 import ProgramGenerator from './ProgramGenerator';
 import ThrowingGenerator from './ThrowingGenerator';
@@ -9,6 +9,7 @@ import HittingGenerator from './HittingGenerator';
 import NutritionGenerator from './NutritionGenerator';
 import AutoProgram from './AutoProgram';
 import ExerciseVideoGaps from './ExerciseVideoGaps';
+import ExerciseVideoLibrary from './ExerciseVideoLibrary';
 
 /* --------------------------------------------------------------------------- *
  *  Programming — unified staff hub for training/meal libraries + the generators.
@@ -19,9 +20,10 @@ import ExerciseVideoGaps from './ExerciseVideoGaps';
  *    • Generate  — Auto-Program (all four domains for one athlete in one pass,
  *                  #174) plus the four individual assessment/data-driven
  *                  generators (S&C, Throwing, Hitting, Nutrition).
- *    • Videos    — the exercise-video gap report (#170): every exercise in the
- *                  libraries and assigned programs that has no video link,
- *                  with the best match from the existing library.
+ *    • Videos    — Missing videos: the exercise-video gap report (#170), every
+ *                  exercise with no video link + the best library match.
+ *                  All videos (#459): the whole library, with a Replace that
+ *                  rewrites every copy of the link (ExerciseVideoLibrary.js).
  * --------------------------------------------------------------------------- */
 
 export default function Programming({ userId, userRole }) {
@@ -31,6 +33,7 @@ export default function Programming({ userId, userRole }) {
   const [view, setView] = useState('programs'); // 'programs' | 'generate'
   const [programsTab, setProgramsTab] = useState('training'); // 'training' | 'meals'
   const [genTab, setGenTab] = useState('auto'); // 'auto' | 'sc' | 'throwing' | 'hitting' | 'nutrition'
+  const [videosTab, setVideosTab] = useState('missing'); // 'missing' | 'all' (#459)
 
   // Teams + players power the Training/Meal library tabs (mirrors CoachTools).
   const [loadError, setLoadError] = useState('');
@@ -54,6 +57,11 @@ export default function Programming({ userId, userRole }) {
       setLoadError('');
     })();
   }, []);
+
+  const videosSubTabs = [
+    { key: 'missing', icon: AlertTriangle, label: 'Missing videos' },
+    { key: 'all', icon: Video, label: 'All videos' },
+  ];
 
   const programsSubTabs = [
     { key: 'training', icon: Dumbbell, label: 'Training Programs' },
@@ -148,8 +156,14 @@ export default function Programming({ userId, userRole }) {
 
       {view === 'videos' && (
         <div className="bg-white rounded-lg shadow">
+          <div className="border-b border-gray-200">
+            <nav className="flex space-x-8 px-6 overflow-x-auto">
+              {videosSubTabs.map((tab) => subTab(tab, videosTab, setVideosTab))}
+            </nav>
+          </div>
           <div className="p-6">
-            <ExerciseVideoGaps userId={userId} userRole={userRole} />
+            {videosTab === 'missing' && <ExerciseVideoGaps userId={userId} userRole={userRole} />}
+            {videosTab === 'all' && <ExerciseVideoLibrary />}
           </div>
         </div>
       )}

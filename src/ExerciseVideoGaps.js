@@ -93,7 +93,7 @@ export const VIDEO_URL_HELP =
   'Accepted: youtube.com/watch?v=…, youtu.be/…, youtube.com/shorts/… or /live/…, vimeo.com/123456789, or loom.com/share/… . https only.';
 
 /** @returns {{ ok: true, url: string } | { ok: false, reason: string }} */
-function validateVideoUrl(raw) {
+export function validateVideoUrl(raw) {
   const trimmed = typeof raw === 'string' ? raw.trim() : '';
   if (!trimmed) return { ok: false, reason: 'Paste a video link first.' };
 
@@ -176,7 +176,7 @@ export const OWNERSHIP = {
   STAFF: 'staff_write',   // someone else made it, but I am admin/coach — allowed
                           // by the #388 staff policy, and proved after the write
   OTHER: 'other_owner',   // someone else made it and I am not staff — refused
-  ORPHAN: 'no_owner',     // created_by IS NULL — this screen does not write these
+  ORPHAN: 'no_owner',     // created_by IS NULL and I am not staff — refused
   UNKNOWN: 'unknown',     // we could not resolve the current user; attempt and prove
 };
 
@@ -401,7 +401,9 @@ export default function ExerciseVideoGaps({ userRole }) {
     const map = new Map();
     templates.forEach((t) => {
       const owner = t.created_by || null;
-      if (!owner) map.set(t.id, OWNERSHIP.ORPHAN);
+      // #458: the staff-write policy (live since #388) has no created_by
+      // condition, so staff can save ownerless templates too.
+      if (!owner) map.set(t.id, isStaff ? OWNERSHIP.STAFF : OWNERSHIP.ORPHAN);
       else if (currentUserId && owner === currentUserId) map.set(t.id, OWNERSHIP.EDITABLE);
       else if (isStaff) map.set(t.id, OWNERSHIP.STAFF);
       else if (!currentUserId) map.set(t.id, OWNERSHIP.UNKNOWN);

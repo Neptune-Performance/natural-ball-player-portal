@@ -35,6 +35,13 @@ async function fetchExerciseVideos() {
   }
 }
 
+// #459: the All videos screen rewrites library rows; drop the cache so the
+// next editor open sees the new links instead of this session's stale copy.
+export function invalidateExerciseVideos() {
+  cachedVideos = null;
+  inFlightPromise = null;
+}
+
 export function useExerciseVideos() {
   const [videos, setVideos] = useState(cachedVideos || []);
   const [loading, setLoading] = useState(cachedVideos === null);
