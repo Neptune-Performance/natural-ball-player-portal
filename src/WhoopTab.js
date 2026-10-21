@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase, supabaseUrl } from './supabaseClient';
 import { Activity, RefreshCw, Link2, Unlink } from 'lucide-react';
+import { BAND_CLASS, BAND_HEX, BAND_LEGEND, BASELINE_DAYS, cycleBands, sleepBands, bandWorkoutStrain, bandAsleep } from './whoopBands';
 import { fmtLocalDate } from './scheduleUtils';
 import WhoopCommunityCodeCard from './WhoopCommunityCode';
 
@@ -128,9 +129,9 @@ function CircularGauge({ value, max, color, label, display, size = 90 }) {
 
 // ---- Stat Pill ----
 
-function StatPill({ label, value, unit }) {
+function StatPill({ label, value, unit, band = null }) {
   return (
-    <div className="bg-gray-50 rounded-lg px-3 py-2 text-center min-w-[70px]">
+    <div className={`${band ? BAND_CLASS[band] : 'bg-gray-50'} rounded-lg px-3 py-2 text-center min-w-[70px]`}>
       <div className="text-sm font-semibold text-gray-900">
         {value}
         {unit && <span className="text-[10px] text-gray-400 ml-0.5">{unit}</span>}
@@ -263,6 +264,12 @@ function msToHM(ms) {
   return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
+// #457: a table value on its red/yellow/green band (whoopBands.js); null band = neutral.
+function Banded({ band, children }) {
+  if (!band) return children;
+  return <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${BAND_CLASS[band]}`}>{children}</span>;
+}
+
 function StateBadge({ state }) {
   const colors = state === 'green'
     ? 'bg-green-100 text-green-700'
@@ -272,7 +279,7 @@ function StateBadge({ state }) {
   return <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${colors}`}>{state || '\u2014'}</span>;
 }
 
-function CyclesTable({ cycles, sleep }) {
+function CyclesTable({ cycles, sleep, history }) {
   const sorted = [...cycles].sort((a, b) => b.cycle_date.localeCompare(a.cycle_date));
   const sleepByDate = new Map(sleep.map(s => [s.sleep_date, s]));
 
@@ -297,29 +304,31 @@ function CyclesTable({ cycles, sleep }) {
             const readiness = computeReadiness(c, matchingSleep, cycles, sleep);
             const rState = readinessState(readiness);
             const rColors = rState === 'green' ? 'bg-teal-100 text-teal-700' : rState === 'yellow' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700';
+            const b = cycleBands(c, history);
             return (
               <tr key={c.id} className="border-b border-gray-100 hover:bg-gray-50 transition">
                 <td className="py-2 px-2 text-gray-700">{c.cycle_date}</td>
                 <td className="py-2 px-2 text-center">
                   {readiness !== null ? <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${rColors}`}>{readiness}%</span> : '\u2014'}
                 </td>
-                <td className="py-2 px-2 text-right font-medium">{c.recovery_score !== null ? `${Math.round(c.recovery_score)}%` : '\u2014'}</td>
+                <td className="py-2 px-2 text-right font-medium">{c.recovery_score !== null ? <Banded band={b.recovery}>{Math.round(c.recovery_score)}%</Banded> : '\u2014'}</td>
                 <td className="py-2 px-2 text-center"><StateBadge state={c.recovery_state} /></td>
-                <td className="py-2 px-2 text-right text-gray-600">{c.hrv_rmssd !== null ? Math.round(c.hrv_rmssd) : '\u2014'}</td>
-                <td className="py-2 px-2 text-right text-gray-600">{c.resting_heart_rate !== null ? Math.round(c.resting_heart_rate) : '\u2014'}</td>
-                <td className="py-2 px-2 text-right text-gray-600">{c.strain_score !== null ? Number(c.strain_score).toFixed(1) : '\u2014'}</td>
-                <td className="py-2 px-2 text-right text-gray-600">{c.spo2_pct !== null ? `${Number(c.spo2_pct).toFixed(0)}%` : '\u2014'}</td>
+                <td className="py-2 px-2 text-right text-gray-600">{c.hrv_rmssd !== null ? <Banded band={b.hrv}>{Math.round(c.hrv_rmssd)}</Banded> : '\u2014'}</td>
+                <td className="py-2 px-2 text-right text-gray-600">{c.resting_heart_rate !== null ? <Banded band={b.rhr}>{Math.round(c.resting_heart_rate)}</Banded> : '\u2014'}</td>
+                <td className="py-2 px-2 text-right text-gray-600">{c.strain_score !== null ? <Banded band={b.strain}>{Number(c.strain_score).toFixed(1)}</Banded> : '\u2014'}</td>
+                <td className="py-2 px-2 text-right text-gray-600">{c.spo2_pct !== null ? <Banded band={b.spo2}>{Number(c.spo2_pct).toFixed(0)}%</Banded> : '\u2014'}</td>
               </tr>
             );
           })}
         </tbody>
       </table>
       {sorted.length === 0 && <p className="text-center text-gray-400 text-xs py-8">No cycle data</p>}
+      {sorted.length > 0 && <p className="text-[10px] text-gray-400 mt-2 px-2">{BAND_LEGEND}</p>}
     </div>
   );
 }
 
-function SleepTable({ sleep }) {
+function SleepTable({ sleep, history }) {
   const sorted = [...sleep].sort((a, b) => b.sleep_date.localeCompare(a.sleep_date));
   return (
     <div className="overflow-x-auto">
@@ -337,21 +346,26 @@ function SleepTable({ sleep }) {
           </tr>
         </thead>
         <tbody>
-          {sorted.map(s => (
-            <tr key={s.id} className="border-b border-gray-100 hover:bg-gray-50 transition">
-              <td className="py-2 px-2 text-gray-700">{s.sleep_date}</td>
-              <td className="py-2 px-2 text-right font-medium">{s.sleep_score !== null ? `${Math.round(s.sleep_score)}%` : '\u2014'}</td>
-              <td className="py-2 px-2 text-right text-gray-600">{msToHM(s.total_duration_ms)}</td>
-              <td className="py-2 px-2 text-right text-gray-600">{s.sleep_efficiency !== null ? `${Math.round(s.sleep_efficiency)}%` : '\u2014'}</td>
-              <td className="py-2 px-2 text-right text-gray-600">{msToHM(s.rem_duration_ms)}</td>
-              <td className="py-2 px-2 text-right text-gray-600">{msToHM(s.sws_duration_ms)}</td>
-              <td className="py-2 px-2 text-right text-gray-600">{msToHM(s.light_duration_ms)}</td>
-              <td className="py-2 px-2 text-right text-gray-600">{msToHM(s.awake_duration_ms)}</td>
-            </tr>
-          ))}
+          {sorted.map(s => {
+            const b = sleepBands(s, history);
+            return (
+              <tr key={s.id} className="border-b border-gray-100 hover:bg-gray-50 transition">
+                <td className="py-2 px-2 text-gray-700">{s.sleep_date}</td>
+                <td className="py-2 px-2 text-right font-medium">{s.sleep_score !== null ? <Banded band={b.score}>{Math.round(s.sleep_score)}%</Banded> : '\u2014'}</td>
+                {/* Duration is time in bed; its band is time ASLEEP (in bed minus awake), same as the sleep_short nudge. */}
+                <td className="py-2 px-2 text-right text-gray-600"><Banded band={b.asleep}>{msToHM(s.total_duration_ms)}</Banded></td>
+                <td className="py-2 px-2 text-right text-gray-600">{s.sleep_efficiency !== null ? <Banded band={b.efficiency}>{Math.round(s.sleep_efficiency)}%</Banded> : '\u2014'}</td>
+                <td className="py-2 px-2 text-right text-gray-600"><Banded band={b.rem}>{msToHM(s.rem_duration_ms)}</Banded></td>
+                <td className="py-2 px-2 text-right text-gray-600"><Banded band={b.deep}>{msToHM(s.sws_duration_ms)}</Banded></td>
+                <td className="py-2 px-2 text-right text-gray-600">{msToHM(s.light_duration_ms)}</td>
+                <td className="py-2 px-2 text-right text-gray-600"><Banded band={b.awake}>{msToHM(s.awake_duration_ms)}</Banded></td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       {sorted.length === 0 && <p className="text-center text-gray-400 text-xs py-8">No sleep data</p>}
+      {sorted.length > 0 && <p className="text-[10px] text-gray-400 mt-2 px-2">Green = good, yellow = watch, red = needs attention. Duration is coloured by time asleep (8 h+ green, under 7 h red); REM and deep by their share of sleep.</p>}
     </div>
   );
 }
@@ -376,7 +390,7 @@ function WorkoutsTable({ workouts }) {
             <tr key={w.id} className="border-b border-gray-100 hover:bg-gray-50 transition">
               <td className="py-2 px-2 text-gray-700">{w.workout_date}</td>
               <td className="py-2 px-2 text-gray-900">{w.sport_name || 'Activity'}</td>
-              <td className="py-2 px-2 text-right text-gray-600">{w.strain_score !== null ? Number(w.strain_score).toFixed(1) : '\u2014'}</td>
+              <td className="py-2 px-2 text-right text-gray-600">{w.strain_score !== null ? <Banded band={bandWorkoutStrain(w.strain_score)}>{Number(w.strain_score).toFixed(1)}</Banded> : '\u2014'}</td>
               <td className="py-2 px-2 text-right text-gray-600">{w.average_heart_rate !== null ? Math.round(w.average_heart_rate) : '\u2014'}</td>
               <td className="py-2 px-2 text-right text-gray-600">{w.max_heart_rate !== null ? Math.round(w.max_heart_rate) : '\u2014'}</td>
               <td className="py-2 px-2 text-right text-gray-600">{msToHM(w.duration_ms)}</td>
@@ -409,6 +423,9 @@ export default function WhoopTab({ userId, userRole, loggedInUserId, athleteName
   const [cycles, setCycles] = useState([]);
   const [sleep, setSleep] = useState([]);
   const [workouts, setWorkouts] = useState([]);
+  // #457: the range plus BASELINE_DAYS more, used only for personal baselines.
+  const [historyCycles, setHistoryCycles] = useState([]);
+  const [historySleep, setHistorySleep] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
@@ -432,8 +449,9 @@ export default function WhoopTab({ userId, userRole, loggedInUserId, athleteName
       const headers = await getAuthHeaders();
       const to = fmtLocalDate(new Date());
       const from = fmtLocalDate(new Date(Date.now() - range * 86_400_000));
+      const historyFrom = fmtLocalDate(new Date(Date.now() - (range + BASELINE_DAYS) * 86_400_000));
       const res = await fetch(
-        `${functionUrl}?action=data&target_user_id=${userId}&from=${from}&to=${to}`,
+        `${functionUrl}?action=data&target_user_id=${userId}&from=${historyFrom}&to=${to}`,
         { headers }
       );
       if (!res.ok) {
@@ -448,9 +466,13 @@ export default function WhoopTab({ userId, userRole, loggedInUserId, athleteName
       }
       const data = await res.json();
       setConnected(data.connected);
-      setCycles(data.cycles || []);
-      setSleep(data.sleep || []);
-      setWorkouts(data.workouts || []);
+      const allCycles = data.cycles || [];
+      const allSleep = data.sleep || [];
+      setHistoryCycles(allCycles);
+      setHistorySleep(allSleep);
+      setCycles(allCycles.filter((c) => c.cycle_date >= from));
+      setSleep(allSleep.filter((x) => x.sleep_date >= from));
+      setWorkouts((data.workouts || []).filter((w) => w.workout_date >= from));
     } catch (err) {
       console.error('Whoop fetch error:', err);
     }
@@ -516,6 +538,8 @@ export default function WhoopTab({ userId, userRole, loggedInUserId, athleteName
     setCycles([]);
     setSleep([]);
     setWorkouts([]);
+    setHistoryCycles([]);
+    setHistorySleep([]);
   };
 
   const handleSync = async () => {
@@ -640,6 +664,9 @@ export default function WhoopTab({ userId, userRole, loggedInUserId, athleteName
 
   const recoveryScore = todayCycle?.recovery_score ?? null;
   const recoveryColor = todayCycle?.recovery_state === 'green' ? '#22c55e' : todayCycle?.recovery_state === 'yellow' ? '#eab308' : '#ef4444';
+  // #457: bands for the rest of today's numbers (personal baselines from the loaded history).
+  const todayCycleBands = cycleBands(todayCycle, historyCycles);
+  const todaySleepBands = sleepBands(todaySleep, historySleep);
   const sleepScore = todaySleep?.sleep_score ?? null;
   const totalHours = todaySleep?.total_duration_ms ? (todaySleep.total_duration_ms / 3_600_000).toFixed(1) : null;
   const strainScore = todayCycle?.strain_score ? Number(todayCycle.strain_score) : null;
@@ -767,24 +794,26 @@ export default function WhoopTab({ userId, userRole, loggedInUserId, athleteName
             <div className="flex justify-center gap-4 sm:gap-6 mb-4 flex-wrap">
               <CircularGauge value={prepareScore} max={100} color={prepareColor} label="Prepare" display={prepareScore !== null ? `${prepareScore}%` : '\u2014'} />
               <CircularGauge value={recoveryScore} max={100} color={recoveryColor} label="Recovery" display={recoveryScore !== null ? `${Math.round(recoveryScore)}%` : '\u2014'} />
-              <CircularGauge value={sleepScore} max={100} color="#3b82f6" label={totalHours ? `${totalHours}h sleep` : 'Sleep'} display={sleepScore !== null ? `${Math.round(sleepScore)}%` : '\u2014'} />
-              <CircularGauge value={strainScore} max={21} color="#f97316" label="Strain" display={strainScore !== null ? strainScore.toFixed(1) : '\u2014'} />
+              <CircularGauge value={sleepScore} max={100} color={BAND_HEX[todaySleepBands.score] || '#3b82f6'} label={totalHours ? `${totalHours}h sleep` : 'Sleep'} display={sleepScore !== null ? `${Math.round(sleepScore)}%` : '\u2014'} />
+              <CircularGauge value={strainScore} max={21} color={BAND_HEX[todayCycleBands.strain] || '#f97316'} label="Strain" display={strainScore !== null ? strainScore.toFixed(1) : '\u2014'} />
               <CircularGauge value={calories} max={4000} color="#f97316" label="Calories" display={calories !== null ? `${calories}` : '\u2014'} />
             </div>
 
             {/* Stat pills */}
             <div className="flex justify-center gap-2 flex-wrap mb-3">
-              <StatPill label="Time in Bed" value={todaySleep?.total_duration_ms ? (todaySleep.total_duration_ms / 3_600_000).toFixed(1) : '\u2014'} unit="hrs" />
-              <StatPill label="HRV" value={todayCycle?.hrv_rmssd != null ? `${Math.round(todayCycle.hrv_rmssd)}` : '\u2014'} unit="ms" />
-              <StatPill label="RHR" value={todayCycle?.resting_heart_rate != null ? `${Math.round(todayCycle.resting_heart_rate)}` : '\u2014'} unit="bpm" />
-              <StatPill label="SpO2" value={todayCycle?.spo2_pct != null ? `${Number(todayCycle.spo2_pct).toFixed(0)}` : '\u2014'} unit="%" />
+              <StatPill label="Time in Bed" value={todaySleep?.total_duration_ms ? (todaySleep.total_duration_ms / 3_600_000).toFixed(1) : '\u2014'} unit="hrs" band={bandAsleep(todaySleep)} />
+              <StatPill label="HRV" value={todayCycle?.hrv_rmssd != null ? `${Math.round(todayCycle.hrv_rmssd)}` : '\u2014'} unit="ms" band={todayCycleBands.hrv} />
+              <StatPill label="RHR" value={todayCycle?.resting_heart_rate != null ? `${Math.round(todayCycle.resting_heart_rate)}` : '\u2014'} unit="bpm" band={todayCycleBands.rhr} />
+              <StatPill label="SpO2" value={todayCycle?.spo2_pct != null ? `${Number(todayCycle.spo2_pct).toFixed(0)}` : '\u2014'} unit="%" band={todayCycleBands.spo2} />
               {todayCycle?.skin_temp_celsius != null && (
-                <StatPill label="Skin Temp" value={Number(todayCycle.skin_temp_celsius).toFixed(1)} unit="\u00b0C" />
+                <StatPill label="Skin Temp" value={Number(todayCycle.skin_temp_celsius).toFixed(1)} unit="\u00b0C" band={todayCycleBands.skinTemp} />
               )}
               {todaySleep?.respiratory_rate != null && (
-                <StatPill label="Resp Rate" value={Number(todaySleep.respiratory_rate).toFixed(1)} unit="rpm" />
+                <StatPill label="Resp Rate" value={Number(todaySleep.respiratory_rate).toFixed(1)} unit="rpm" band={todaySleepBands.resp} />
               )}
             </div>
+
+            <p className="text-center text-[10px] text-gray-400 mb-3">{BAND_LEGEND}</p>
 
             {/* Sleep stage bar */}
             {todaySleep && (
@@ -886,8 +915,8 @@ export default function WhoopTab({ userId, userRole, loggedInUserId, athleteName
               </button>
             ))}
           </div>
-          {dataSubTab === 'cycles' && <CyclesTable cycles={cycles} sleep={sleep} />}
-          {dataSubTab === 'sleep' && <SleepTable sleep={sleep} />}
+          {dataSubTab === 'cycles' && <CyclesTable cycles={cycles} sleep={sleep} history={historyCycles} />}
+          {dataSubTab === 'sleep' && <SleepTable sleep={sleep} history={historySleep} />}
           {dataSubTab === 'workouts' && <WorkoutsTable workouts={workouts} />}
         </div>
       )}
