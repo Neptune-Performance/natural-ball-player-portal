@@ -13,6 +13,8 @@
  * cases follow the surgeon's protocol (the UI says so on every plan).
  * ========================================================================= */
 
+import { resolveBankExercise } from './ptExerciseBank';
+
 export const AGE_FACTOR={youth:2.6,teen:3.2,"20s":3.6,"30s":3.4,"4050s":2.9,"60s":2.3,"70s":1.7};
 export const ATH_BONUS={none:0,youth:0.6,hs:1.1,college:1.6,pro:2.1};
 export const AGE_NAME={youth:"Youth (8–12)",teen:"Teen (13–17)","20s":"20s","30s":"30s","4050s":"40s–50s","60s":"60s","70s":"70s+"};
@@ -465,12 +467,19 @@ export const GENERAL_FLAGS = ['Severe, unremitting, or worsening night pain', 'F
 const WEEKDAY_PATTERN = { 3: [0, 2, 4], 4: [0, 1, 3, 4], 5: [0, 1, 2, 3, 4], 6: [0, 1, 2, 3, 4, 5] };
 const BLOCK_CATEGORY = { mob: 'recovery', main: 'conditioning', bal: 'conditioning', pow: 'conditioning', rts: 'other', mon: 'recovery' };
 
-export function planToProgramDays(plan, days) {
+/* #465: `videoByKey` (useExerciseVideos().byKey) swaps each generic engine
+   item for the specific filmed NBP movement mapped in ptExerciseBank.js —
+   that movement's name and video link, chosen for how far into the phase the
+   week is. The engine's wording stays in the description ("For: …"). Items
+   with no mapping, clinician-added items, or a missing library keep the
+   generic text and no link. */
+export function planToProgramDays(plan, days, videoByKey) {
   const pattern = WEEKDAY_PATTERN[days] || WEEKDAY_PATTERN[4];
   const rows = [];
   plan.weeks.forEach(wk => {
     const ph = plan.phases[wk.phaseIdx];
     const weekInPhase = wk.week - (ph.adjWk[0] + 1);
+    const phaseWeeks = ph.adjWk[1] - ph.adjWk[0];
     pattern.forEach((weekday, si) => {
       const last = si === pattern.length - 1;
       const blocks = wk.blocks.filter(b => {
@@ -481,11 +490,13 @@ export function planToProgramDays(plan, days) {
       let sort = 0;
       const exercises = [];
       blocks.forEach(b => b.items.forEach(x => {
+        const bank = x.cl ? null : resolveBankExercise(x.n, weekInPhase, phaseWeeks, videoByKey);
         exercises.push({
           category: BLOCK_CATEGORY[b.kind] || 'other',
-          name: x.cl ? `${x.n} (clinician)` : x.n,
+          name: x.cl ? `${x.n} (clinician)` : (bank ? bank.name : x.n),
           reps: x.d,
-          description: [b.t + (b.note ? ` — ${b.note}` : ''), x.p ? `Progression: ${x.p}` : ''].filter(Boolean).join('\n'),
+          video_url: bank ? bank.video_url : null,
+          description: [bank ? `For: ${x.n}` : '', b.t + (b.note ? ` — ${b.note}` : ''), x.p ? `Progression: ${x.p}` : ''].filter(Boolean).join('\n'),
           sort_order: sort++,
         });
       }));
