@@ -10,6 +10,7 @@ import { AddEventPanel } from './Schedule';
 import WhoopTab from './WhoopTab';
 import TrackmanTab from './TrackmanTab';
 import ExternalStatsTab from './ExternalStatsTab';
+import PitchingOutingsView from './PitchingOutings'; // #463
 import LiftLogTab from './LiftLogTab'; // #460
 import RegistrationTab from './RegistrationTab';
 import { fmtLocalDate } from './scheduleUtils';
@@ -265,13 +266,17 @@ const RECORDS_SUB_TABS = [
   // `canSeeNotes`, which is literally `userRole === 'admin' || userRole ===
   // 'coach'` — the same test, phrased the same way.
   { key: 'attendance', label: 'Attendance', staffOnly: true },
-  // Practice Stats had TWO gates, not one: `roles: ['admin', 'coach']` AND an
-  // earlier player-self exception (#278) that returned true for a player
-  // looking at their own profile, before the roles test was ever reached. Drop
-  // the second one and athletes lose the only place they can log their own
-  // practice work; treat it as ungated and every player sees every other
-  // player's. Hence `playerSelf` alongside `staffOnly` — see
-  // visibleRecordsSubTabs below, where the pair is evaluated.
+  // #463: Practice Stats moved on to the Stats tab (STATS_SUB_TABS), gate and all.
+];
+
+// #463: the sections inside the "Stats" tab. External (#421) has no gate.
+// Practice Stats keeps the two-part gate it had in Records: `staffOnly` AND a
+// player-self exception (#278) — a player sees it on their own profile only.
+// Drop `playerSelf` and athletes lose the one place they log their own
+// practice work; drop `staffOnly` and every player sees every other player's.
+// See visibleStatsSubTabs, where the pair is evaluated.
+const STATS_SUB_TABS = [
+  { key: 'external', label: 'External Stats' },
   { key: 'practice_stats', label: 'Practice Stats', staffOnly: true, playerSelf: true },
 ];
 
@@ -406,6 +411,7 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
 
   // #370: which section is showing inside the merged "Records" tab.
   const [recordsSubTab, setRecordsSubTab] = useState('documents');
+  const [statsSubTab, setStatsSubTab] = useState('external'); // #463
 
   // #369: which section is showing inside the merged "Health" tab, and which
   // routine type is picked in the Arm Care drop-down ('' = nothing picked yet).
@@ -439,6 +445,13 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
   // tab filter did with `return loggedInUserId === userId`. Notes joined it in
   // #422. Attendance and anything else marked staffOnly without playerSelf is
   // unreachable for a player, on their own profile or anyone else's, as before.
+  const visibleStatsSubTabs = STATS_SUB_TABS.filter(sub => {
+    if (!sub.staffOnly) return true;
+    if (canSeeNotes) return true;
+    if (sub.playerSelf && userRole === 'player' && loggedInUserId === userId) return true;
+    return false;
+  });
+  const activeStatsSubTab = visibleStatsSubTabs.some(sub => sub.key === statsSubTab) ? statsSubTab : 'external';
   const visibleRecordsSubTabs = RECORDS_SUB_TABS.filter(sub => {
     if (!sub.staffOnly) return true;
     if (canSeeNotes) return true;
@@ -605,11 +618,16 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
       if (initialTab === 'mental') {
         setShowMentalTraining(true);
       // #370: Records sub-tab keys open the Records tab on the right section.
-      // assessment, attendance and practice_stats all live in Records (#376), so
-      // the old top-level deep links ?tab=attendance / ?tab=practice_stats keep
+      // assessment and attendance live in Records (#376; practice_stats moved to
+      // Stats in #463, handled above), so the old deep links ?tab=attendance keep
       // working — including PlayerDashboard's onOpenPracticeStats, which is the
       // only in-app caller. A player deep-linked to 'attendance' lands on Records
       // and activeRecordsSubTab sends them to Documents; they never see it.
+      // #463: Practice Stats moved to the Stats tab; the old deep link (and
+      // PlayerDashboard's onOpenPracticeStats) lands there.
+      } else if (STATS_SUB_TABS.some(sub => sub.key === initialTab)) {
+        setActiveProfileTab('stats');
+        setStatsSubTab(initialTab);
       } else if (RECORDS_SUB_TABS.some(sub => sub.key === initialTab)) {
         setActiveProfileTab('records');
         setRecordsSubTab(initialTab);
@@ -2574,6 +2592,26 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
               above it — smaller, rounded-full, outlined rather than filled — so
               it reads as a level below. flex-wrap, as per the #321 QA notes, so
               it stacks instead of panning sideways on a 390px phone. */}
+          {/* #463: Stats sub-nav, same styling as Records. */}
+          {activeProfileTab === 'stats' && visibleStatsSubTabs.length > 1 && (
+            <nav className="flex flex-wrap gap-1.5 mb-5 min-w-0">
+              {visibleStatsSubTabs.map(sub => (
+                <button
+                  key={sub.key}
+                  type="button"
+                  onClick={() => setStatsSubTab(sub.key)}
+                  className={`min-h-[36px] px-3 py-1.5 rounded-full border text-xs font-medium transition whitespace-nowrap touch-manipulation ${
+                    activeStatsSubTab === sub.key
+                      ? 'bg-white border-blue-300 text-blue-700 shadow-sm'
+                      : 'bg-transparent border-gray-200 text-gray-500 hover:bg-gray-50 hover:text-gray-900'
+                  }`}
+                >
+                  {sub.label}
+                </button>
+              ))}
+            </nav>
+          )}
+
           {activeProfileTab === 'records' && (
             <nav className="flex flex-wrap gap-1.5 mb-5 min-w-0">
               {visibleRecordsSubTabs.map(sub => (
@@ -2712,7 +2750,7 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
             <TrackmanTab userId={userId} userRole={userRole} loggedInUserId={loggedInUserId} />
           )}
 
-          {activeProfileTab === 'stats' && (
+          {activeProfileTab === 'stats' && activeStatsSubTab === 'external' && (
             <ExternalStatsTab userId={userId} loggedInUserId={loggedInUserId} userRole={userRole} />
           )}
 
@@ -4674,10 +4712,10 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
             <RegistrationTab userId={userId} loggedInUserId={loggedInUserId} userRole={userRole} />
           )}
 
-          {activeProfileTab === 'records' && activeRecordsSubTab === 'practice_stats' && (
+          {activeProfileTab === 'stats' && activeStatsSubTab === 'practice_stats' && (
             // Players can only ever reach this section on their own profile (the
-            // visibleRecordsSubTabs filter enforces loggedInUserId === userId,
-            // and activeRecordsSubTab can only ever name a visible one), so it's safe
+            // visibleStatsSubTabs filter enforces loggedInUserId === userId,
+            // and activeStatsSubTab can only ever name a visible one), so it's safe
             // to also let them log their own stats here specifically — this
             // does NOT touch canEditProfile itself, which still gates every
             // other admin/coach-only field on the page (#278).
@@ -6083,7 +6121,13 @@ function PracticeStatsTab({ playerId, canEdit }) {
         ))}
       </div>
       {mode === 'hitting' && <HittingStatsView playerId={playerId} canEdit={canEdit} />}
-      {mode === 'pitching' && <PitchingStatsView playerId={playerId} canEdit={canEdit} />}
+      {mode === 'pitching' && (
+        <div className="space-y-8">
+          {/* #463: whole-outing line first; most athletes only have the box score. */}
+          <PitchingOutingsView playerId={playerId} canEdit={canEdit} />
+          <PitchingStatsView playerId={playerId} canEdit={canEdit} />
+        </div>
+      )}
       {mode === 'catching' && <CatchingStatsView playerId={playerId} canEdit={canEdit} />}
     </div>
   );
@@ -6394,11 +6438,14 @@ function PitchingStatsView({ playerId, canEdit }) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold text-gray-900">Pitching Stats</h3>
+        <div>
+          <h3 className="text-lg font-semibold text-gray-900">Pitch by pitch</h3>
+          <p className="text-xs text-gray-500">One row per pitch, when you have them.</p>
+        </div>
         {canEdit && !adding && (
-          <button onClick={() => setAdding(true)} className="bg-blue-600 text-white px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center space-x-1">
+          <button onClick={() => setAdding(true)} className="bg-white border border-blue-600 text-blue-700 px-3 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-50 flex items-center space-x-1">
             <Plus size={16} />
-            <span>Log Outing</span>
+            <span>Log Pitch</span>
           </button>
         )}
       </div>
