@@ -10,6 +10,7 @@ import { AddEventPanel } from './Schedule';
 import WhoopTab from './WhoopTab';
 import TrackmanTab from './TrackmanTab';
 import ExternalStatsTab from './ExternalStatsTab';
+import LiftLogTab from './LiftLogTab'; // #460
 import RegistrationTab from './RegistrationTab';
 import { fmtLocalDate } from './scheduleUtils';
 import SignedSignatureImage from './SignedSignatureImage';
@@ -251,6 +252,9 @@ const RECORDS_SUB_TABS = [
   { key: 'registration', label: 'Registration' },
   { key: 'codes', label: 'Codes' },
   { key: 'goals', label: 'Goals' },
+  // #460: weights logged per movement in scheduled workouts. Same visibility
+  // as Goals — the athlete and any staff member.
+  { key: 'lift_log', label: 'Lift Log' },
   { key: 'notes', label: 'Notes', staffOnly: true, playerSelf: true },
   { key: 'assessment', label: 'Assessment' },
   // #376 (second round): moved down from the top-level tab bar. The gates are
@@ -4660,6 +4664,10 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
                 </div>
               )}
             </div>
+          )}
+
+          {activeProfileTab === 'records' && activeRecordsSubTab === 'lift_log' && (
+            <LiftLogTab userId={userId} />
           )}
 
           {activeProfileTab === 'records' && activeRecordsSubTab === 'registration' && (

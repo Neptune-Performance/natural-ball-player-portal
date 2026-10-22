@@ -22,6 +22,8 @@ import { CANCEL_REASON_ATHLETE } from './cancelReasons';
 import { EventRsvpSection } from './EventRsvp';
 import { readAllPages } from './readAllPages';
 import PublicBookingPage from './PublicBookingPage'; // #452
+import ExerciseLogInput from './ExerciseLogInput'; // #460
+import { logOwnerForEvent, canLogWorkout, parseWeight, exerciseNameKey, fetchWorkoutLogs, fetchLastLogs, saveExerciseLog, deleteExerciseLog, MAX_WEIGHT } from './exerciseLogs';
 
 // #347 QA: every path that would wipe a whole facility series asks here first,
 // so the warning and its numbers can never differ between the Delete button on
@@ -2856,6 +2858,7 @@ export default function Schedule({ userId, userRole, onMessageCoach, initialMode
           <WorkoutDetailModal
             event={selectedEvent}
             userRole={userRole}
+            userId={userId}
             onClose={() => {
               setShowEventDetail(false);
               setSelectedEvent(null);
@@ -6094,7 +6097,7 @@ const WORKOUT_HEADER_COLOR = {
   general:  { bg: 'bg-orange-100', text: 'text-orange-600' },
 };
 
-function WorkoutDetailModal({ event, onClose, onDelete, userRole }) {
+function WorkoutDetailModal({ event, onClose, onDelete, userRole, userId }) {
   useModalTracking('WorkoutDetailModal');
   const [exercises, setExercises] = useState([]);
   const [trainingDay, setTrainingDay] = useState(null);
@@ -6104,10 +6107,19 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole }) {
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const canManage = userRole === 'admin' || userRole === 'coach';
+  // #460: the athlete logs the weight used per movement. Staff can log on an
+  // individual athlete's workout; a team workout opened by staff has no single
+  // athlete, so it stays read-only.
+  const logPlayerId = logOwnerForEvent(event, userId, userRole);
+  const canLog = !!logPlayerId && canLogWorkout(event);
+  const [logs, setLogs] = useState({});
+  const [lastLogs, setLastLogs] = useState({});
 
   useEffect(() => {
     const load = async () => {
       setLoading(true);
+      setLogs({});
+      setLastLogs({});
       let loadedExercises = [];
       if (event.training_day_id) {
         const { data: day } = await supabase
@@ -6142,10 +6154,36 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole }) {
         }));
       }
       setExercises(loadedExercises);
+      if (canLog && loadedExercises.length > 0) {
+        try {
+          const [mine, last] = await Promise.all([
+            fetchWorkoutLogs(event.id, logPlayerId),
+            fetchLastLogs(logPlayerId, loadedExercises.map(e => exerciseNameKey(e.name)), event.event_date, event.id),
+          ]);
+          setLogs(mine);
+          setLastLogs(last);
+        } catch (err) {
+          console.error('Error loading exercise logs:', err);
+        }
+      }
       setLoading(false);
     };
     load();
-  }, [event]);
+  }, [event, canLog, logPlayerId]);
+
+  const saveLog = async (ex, weightText, repsText) => {
+    const key = String(ex.id);
+    const existing = logs[key];
+    const weight = parseWeight(weightText);
+    if (Number.isNaN(weight)) throw new Error(`Enter a weight in lb, from 0 to ${MAX_WEIGHT - 1}.`);
+    if (weight === null) {
+      if (existing) await deleteExerciseLog(existing.id);
+      setLogs(prev => { const next = { ...prev }; delete next[key]; return next; });
+      return;
+    }
+    const row = await saveExerciseLog({ event, playerId: logPlayerId, exercise: ex, weight, repsDone: repsText, createdBy: userId });
+    setLogs(prev => ({ ...prev, [key]: row }));
+  };
 
   const groupedByCategory = useMemo(() => {
     const groups = {};
@@ -6169,7 +6207,7 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole }) {
   };
 
   // Escape closes this card, matching EventDetailModal and FacilityEventDetail.
-  // Nothing here is editable, so there is nothing to confirm — but the delete
+  // Weight entries (#460) save on blur, so there is nothing to confirm — but the delete
   // confirmation sits on top of the card, so the first press steps back out of
   // that rather than closing both at once. A delete already in flight is left
   // alone: closing mid-request would hide the result of it.
@@ -6178,6 +6216,8 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole }) {
       if (e.key !== 'Escape') return;
       if (deleting) return;
       if (confirmDelete) { setConfirmDelete(false); return; }
+      // A weight box being typed in saves on blur; the first press commits it.
+      if (document.activeElement?.tagName === 'INPUT') { document.activeElement.blur(); return; }
       onClose();
     };
     window.addEventListener('keydown', onEsc);
@@ -6270,6 +6310,13 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole }) {
                                 load={ex.load || ex.weight}
                                 rest={ex.rest}
                               />
+                              {canLog && (
+                                <ExerciseLogInput
+                                  log={logs[String(ex.id)]}
+                                  last={lastLogs[exerciseNameKey(ex.name)]}
+                                  onSave={(w, r) => saveLog(ex, w, r)}
+                                />
+                              )}
                             </div>
                           );
                         })}
@@ -6284,6 +6331,7 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole }) {
                               <th className="px-3 py-2 w-24 text-center">Load</th>
                               <th className="px-3 py-2 w-20 text-center">Rest</th>
                               <th className="px-3 py-2 w-12 text-center">Video</th>
+                              {canLog && <th className="px-3 py-2">Weight used · Reps</th>}
                             </tr>
                           </thead>
                           <tbody>
@@ -6315,6 +6363,16 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole }) {
                                     <span className="text-gray-300">—</span>
                                   )}
                                 </td>
+                                {canLog && (
+                                  <td className="px-3 py-2 align-top">
+                                    <ExerciseLogInput
+                                      compact
+                                      log={logs[String(ex.id)]}
+                                      last={lastLogs[exerciseNameKey(ex.name)]}
+                                      onSave={(w, r) => saveLog(ex, w, r)}
+                                    />
+                                  </td>
+                                )}
                               </tr>
                             ))}
                           </tbody>
