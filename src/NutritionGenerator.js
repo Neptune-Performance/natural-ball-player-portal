@@ -3,7 +3,7 @@ import { supabase } from './supabaseClient';
 import { readAllPages } from './readAllPages';
 import { Utensils, Search, User, Save, Check, AlertTriangle, Droplet, Clock } from 'lucide-react';
 import {
-  Sex, Goal, Phase, DayType, makeProfile, generatePlan, planToMealRows, mealTotals,
+  Sex, Goal, Phase, DayType, makeProfile, generatePlan, planToMealRows, mealTotals, COACH_OVERRIDE_MIN_KCAL,
 } from './nutritionEngine';
 import { extractMetricsFromSubmissions } from './assessmentMetrics';
 
@@ -59,6 +59,8 @@ export default function NutritionGenerator({ userId, userRole }) {
   const [hrv, setHrv] = useState('');
   const [hrvBase, setHrvBase] = useState('');
   const [restingHr, setRestingHr] = useState('');
+  // #464: coach-set calorie target ('' = use the engine's), floor COACH_OVERRIDE_MIN_KCAL.
+  const [kcalOverride, setKcalOverride] = useState('');
 
   const [programName, setProgramName] = useState('');
   const [assignAthlete, setAssignAthlete] = useState(true);
@@ -154,8 +156,9 @@ export default function NutritionGenerator({ userId, userRole }) {
       allergies: allergies.split(',').map((s) => s.trim()).filter(Boolean),
       dislikes: dislikes.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
     };
-    return generatePlan({ profile, whoop, day, prefs });
-  }, [age, sex, weightLb, heightIn, bodyFat, phase, goal, day, mealsPerDay, vegetarian, vegan, allergies, dislikes, recovery, strain, hrv, hrvBase, restingHr]);
+    const override = kcalOverride === '' ? null : numOr(kcalOverride, null);
+    return generatePlan({ profile, whoop, day, prefs, calorieOverride: override });
+  }, [age, sex, weightLb, heightIn, bodyFat, phase, goal, day, mealsPerDay, vegetarian, vegan, allergies, dislikes, recovery, strain, hrv, hrvBase, restingHr, kcalOverride]);
 
   const save = async () => {
     if (!plan) return;
@@ -330,6 +333,23 @@ export default function NutritionGenerator({ userId, userRole }) {
             </div>
             <div className="flex gap-2 mt-3 text-xs text-gray-600">
               <Droplet className="w-4 h-4 text-blue-400" /> ~{t.fluid_ml} mL fluid · sodium {t.sodium_mg_range[0]}–{t.sodium_mg_range[1]} mg
+            </div>
+            <div className="mt-4 pt-3 border-t border-gray-200/70">
+              <span className={label}>Coach calorie override (min {COACH_OVERRIDE_MIN_KCAL} kcal, any age)</span>
+              <div className="flex items-center gap-2">
+                <input className={inp + ' max-w-[9rem]'} type="number" min={COACH_OVERRIDE_MIN_KCAL} step="50"
+                  value={kcalOverride} onChange={(e) => setKcalOverride(e.target.value)}
+                  placeholder={`engine: ${t.engine_calories}`} />
+                {kcalOverride !== '' && (
+                  <button type="button" onClick={() => setKcalOverride('')} className="text-xs text-gray-500 hover:text-gray-800 underline">Use engine</button>
+                )}
+              </div>
+              {t.coach_override && (
+                <div className="mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5 flex gap-1.5">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                  <span>Overriding the safety guardrails. The plan is saved with this override noted on it.</span>
+                </div>
+              )}
             </div>
           </div>
 

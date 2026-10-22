@@ -29,7 +29,7 @@ import {
 } from './hittingEngine';
 import {
   Goal, Phase as NutriPhase, DayType, makeProfile,
-  generatePlan as generateNutritionPlan, planToMealRows,
+  generatePlan as generateNutritionPlan, planToMealRows, COACH_OVERRIDE_MIN_KCAL,
 } from './nutritionEngine';
 
 /* --------------------------------------------------------------------------- *
@@ -745,6 +745,7 @@ export default function AutoProgram({ userId, userRole }) {
     vegan: false,
     allergies: '',
     dislikes: '',
+    kcalOverride: '', // #464: coach-set calories, '' = engine
     weekInPhase: '1',
   });
   const setS = (k, v) => setShared((s) => ({ ...s, [k]: v }));
@@ -1261,7 +1262,10 @@ export default function AutoProgram({ userId, userRole }) {
         allergies: shared.allergies.split(',').map((s) => s.trim()).filter(Boolean),
         dislikes: shared.dislikes.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
       };
-      const plan = generateNutritionPlan({ profile: nProfile, whoop, day: shared.dayType, prefs });
+      const plan = generateNutritionPlan({
+        profile: nProfile, whoop, day: shared.dayType, prefs,
+        calorieOverride: shared.kcalOverride === '' ? null : numOrNull(shared.kcalOverride),
+      });
       const { planDescription, meals } = planToMealRows(plan);
       const flags = [...(plan.targets.flags || [])];
       if (!profile.weightLb) flags.push('No body weight — every number in this plan is computed from a 180 lb / 72 in default athlete. Do not assign it.');
@@ -1644,6 +1648,13 @@ export default function AutoProgram({ userId, userRole }) {
                 <div className="col-span-2">
                   <span className={LBL}>Dislikes (comma-separated)</span>
                   <input className={INP} value={shared.dislikes} onChange={(e) => setS('dislikes', e.target.value)} placeholder="none" />
+                </div>
+                <div className="col-span-2">
+                  <span className={LBL}>Coach calorie override (min {COACH_OVERRIDE_MIN_KCAL} kcal, any age; blank = engine)</span>
+                  <input className={INP} type="number" min={COACH_OVERRIDE_MIN_KCAL} step="50" value={shared.kcalOverride} onChange={(e) => setS('kcalOverride', e.target.value)} placeholder="engine" />
+                  {shared.kcalOverride !== '' && (
+                    <div className="mt-1 text-xs text-red-700">Overrides the RED-S / youth safety guardrails. The override is noted on the saved plan.</div>
+                  )}
                 </div>
               </div>
             </Section>

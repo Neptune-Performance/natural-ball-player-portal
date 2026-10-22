@@ -81,6 +81,9 @@ const EA_TARGET = 45.0;
 const YOUTH_AGE = 18;
 const MAX_GAIN_PER_WEEK = 0.005;
 const MAX_LOSS_PER_WEEK = 0.0075;
+// #464: a coach can set the day's calories by hand, down to this, at any age,
+// to run a deficit the guardrails above would refuse. Warned, never silent.
+export const COACH_OVERRIDE_MIN_KCAL = 2000;
 
 export function applyGoalAndGuardrails(p, tdee, eee) {
   const notes = [];
@@ -150,7 +153,7 @@ function proteinGPerKg(p) {
   return 1.8;
 }
 
-export function computeMacros(p, w, day, targetKcal) {
+export function computeMacros(p, w, day, targetKcal, { override = false } = {}) {
   const notes = [];
   const zone = recoveryZone(w.recovery_score);
   const band = strainBand(w.day_strain);
@@ -162,19 +165,28 @@ export function computeMacros(p, w, day, targetKcal) {
   let fatG = (targetKcal - kcalFromPc) / 9.0;
   const fatFloorG = Math.max(0.6 * p.weight_kg, (0.18 * targetKcal) / 9.0);
 
+  // #464: under a coach calorie override the 3 g/kg carb floor would push the
+  // plan back over the target, so carbs take the remainder and, if even that
+  // is not enough, protein comes down toward 1.6 g/kg and fat toward 0.5 g/kg.
+  const carbFloor = override ? 0 : 3.0 * p.weight_kg;
+  let proteinOut = proteinG;
   if (fatG < fatFloorG) {
     fatG = fatFloorG;
-    carbG = Math.max(3.0 * p.weight_kg, (targetKcal - proteinG * 4 - fatG * 9) / 4.0);
+    carbG = Math.max(carbFloor, (targetKcal - proteinG * 4 - fatG * 9) / 4.0);
     notes.push('Carbs trimmed slightly to protect a minimum healthy-fat intake.');
   }
 
   const total = proteinG * 4 + carbG * 4 + fatG * 9;
   if (total > targetKcal) {
-    carbG = Math.max(3.0 * p.weight_kg, carbG - (total - targetKcal) / 4.0);
+    carbG = Math.max(carbFloor, carbG - (total - targetKcal) / 4.0);
+  }
+  if (override && proteinOut * 4 + carbG * 4 + fatG * 9 > targetKcal) {
+    fatG = Math.max(0.5 * p.weight_kg, (targetKcal - proteinOut * 4 - carbG * 4) / 9.0);
+    proteinOut = Math.max(1.6 * p.weight_kg, (targetKcal - carbG * 4 - fatG * 9) / 4.0);
   }
 
   notes.push(`Recovery ${zone.toUpperCase()} / strain ${band}: carbs set to ${(carbG / p.weight_kg).toFixed(1)} g/kg, protein ${(proteinG / p.weight_kg).toFixed(1)} g/kg.`);
-  return { protein: Math.round(proteinG), carbs: Math.round(carbG), fat: Math.round(fatG), notes };
+  return { protein: Math.round(proteinOut), carbs: Math.round(carbG), fat: Math.round(fatG), notes };
 }
 
 /* --------------------------------------------------------------------------- *
@@ -400,11 +412,26 @@ export function makeProfile(a = {}) {
   };
 }
 
-export function generatePlan({ profile, whoop, day, prefs }) {
+export function generatePlan({ profile, whoop, day, prefs, calorieOverride = null }) {
   const pr = prefs || { meals_per_day: 4, vegetarian: false, vegan: false, allergies: [], dislikes: [] };
   const { tdee, eee } = maintenanceKcal(profile, whoop, day);
-  const { target, notes: gNotes, flags: gFlags } = applyGoalAndGuardrails(profile, tdee, eee);
-  const { protein, carbs, fat, notes: mNotes } = computeMacros(profile, whoop, day, target);
+  const guarded = applyGoalAndGuardrails(profile, tdee, eee);
+  let target = guarded.target;
+  const gNotes = guarded.notes;
+  let gFlags = guarded.flags;
+  const override = Number.isFinite(calorieOverride) && calorieOverride > 0
+    ? Math.max(COACH_OVERRIDE_MIN_KCAL, Math.round(calorieOverride))
+    : null;
+  if (override != null) {
+    const ea = energyAvailability(override, eee, profile);
+    gFlags = [
+      `COACH OVERRIDE: calories set by hand to ${override} kcal (engine recommended ${Math.round(guarded.target)}). `
+        + `Energy availability ${ea.toFixed(1)} kcal/kg lean mass${ea < EA_HARD_FLOOR ? ` is below the ${EA_HARD_FLOOR} RED-S floor` : ''}`
+        + `${profile.age < YOUTH_AGE ? '; athlete is under 18' : ''}. Monitor weight, energy, sleep and performance weekly.`,
+    ];
+    target = override;
+  }
+  const { protein, carbs, fat, notes: mNotes } = computeMacros(profile, whoop, day, target, { override: override != null });
 
   const zone = recoveryZone(whoop.recovery_score);
   const { notes: rNotes, flags: rFlags } = readinessNotes(whoop);
@@ -415,6 +442,7 @@ export function generatePlan({ profile, whoop, day, prefs }) {
     calories: Math.round(target), protein_g: protein, carbs_g: carbs, fat_g: fat,
     fluid_ml: fluid, sodium_mg_range: sodium, energy_availability: Math.round(ea * 10) / 10,
     recovery_zone: zone, day_type: day, notes: [...gNotes, ...mNotes, ...rNotes], flags: [...gFlags, ...rFlags],
+    coach_override: override != null, engine_calories: Math.round(guarded.target),
   };
   const meals = assembleMeals(targets, pr, day);
   return { targets, meals, hydration: hyd, timing: timingGuidance(day, profile) };
@@ -435,7 +463,7 @@ function mealTypeFor(name) {
  */
 export function planToMealRows(plan) {
   const t = plan.targets;
-  const planDescription = `${t.day_type} · ${t.calories} kcal · P${t.protein_g}/C${t.carbs_g}/F${t.fat_g}g · recovery ${t.recovery_zone} · EA ${t.energy_availability}`;
+  const planDescription = `${t.day_type} · ${t.calories} kcal${t.coach_override ? ` (coach override; engine ${t.engine_calories})` : ''} · P${t.protein_g}/C${t.carbs_g}/F${t.fat_g}g · recovery ${t.recovery_zone} · EA ${t.energy_availability}`;
   const meals = plan.meals.map((m) => {
     const tot = mealTotals(m);
     return {
