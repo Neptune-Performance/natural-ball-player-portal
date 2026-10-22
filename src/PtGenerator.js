@@ -3,7 +3,9 @@ import { supabase } from './supabaseClient';
 import { readAllPages } from './readAllPages';
 import { insertTrainingProgram } from './insertTrainingProgram';
 import { scheduleProgramEvents, singlePassEndDate, describeScheduled, mondayOnOrAfter, deleteProgramEvents, PROGRAM_CALENDAR_CATEGORY } from './programScheduling';
-import { HeartPulse, Search, User, Save, AlertTriangle, ChevronDown, ChevronUp, Plus, X } from 'lucide-react';
+import { HeartPulse, Search, User, Save, AlertTriangle, ChevronDown, ChevronUp, Plus, X, PlayCircle } from 'lucide-react';
+import { useExerciseVideos } from './exerciseVideos';
+import { resolveBankExercise } from './ptExerciseBank';
 import {
   REGIONS, AGE_NAME, ATH_NAME, CAP_WORD, CAP_DESC, NATURE_NAME, GENERAL_FLAGS,
   buildPlan, planToProgramDays, historyAnalysis, goalEmphasis,
@@ -60,6 +62,8 @@ function athleteFromLevel(level) {
 const toggleIn = (list, v) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
 
 export default function PtGenerator({ userId, userRole }) {
+  // #465: library of filmed movements; each engine item resolves to one.
+  const { byKey: videoByKey } = useExerciseVideos();
   const [players, setPlayers] = useState([]);
   const [search, setSearch] = useState('');
   const [selectedId, setSelectedId] = useState(null);
@@ -155,7 +159,7 @@ export default function PtGenerator({ userId, userRole }) {
     let progId = null;
     try {
       const offset = (startWeek - 1) * 7;
-      const rows = planToProgramDays(plan, parseInt(days, 10))
+      const rows = planToProgramDays(plan, parseInt(days, 10), videoByKey)
         .filter((r) => r.day_number > offset)
         .map((r) => ({ ...r, day_number: r.day_number - offset }));
       if (!rows.length) throw new Error('No plan weeks left to save from that start week.');
@@ -177,7 +181,7 @@ export default function PtGenerator({ userId, userRole }) {
         if (dErr) throw dErr;
         if (d.exercises.length) {
           const { error: exErr } = await supabase.from('training_exercises').insert(
-            d.exercises.map((x) => ({ day_id: dayRow.id, category: x.category, name: x.name, description: x.description, reps: x.reps, sort_order: x.sort_order })),
+            d.exercises.map((x) => ({ day_id: dayRow.id, category: x.category, name: x.name, description: x.description, reps: x.reps, video_url: x.video_url, sort_order: x.sort_order })),
           );
           if (exErr) throw exErr;
         }
@@ -399,7 +403,24 @@ export default function PtGenerator({ userId, userRole }) {
                     {wk.blocks.map((b) => (
                       <div key={b.t}>
                         <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">{b.t}{b.note && <span className="normal-case tracking-normal font-normal"> — {b.note}</span>}</p>
-                        <ul className="ml-1">{b.items.map((x) => <li key={x.n}>{x.n}{x.cl && <span className="ml-1 text-[11px] text-violet-700">clinician</span>} <span className="text-gray-500">— {x.d}</span></li>)}</ul>
+                        <ul className="ml-1">{b.items.map((x) => {
+                          // #465: the filmed bank movement this week uses, linked to its video.
+                          const ph = plan.phases[wk.phaseIdx];
+                          const bank = x.cl ? null : resolveBankExercise(x.n, wk.week - (ph.adjWk[0] + 1), ph.adjWk[1] - ph.adjWk[0], videoByKey);
+                          return (
+                            <li key={x.n}>
+                              {bank ? (
+                                <>
+                                  {bank.video_url
+                                    ? <a href={bank.video_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline inline-flex items-center gap-1">{bank.name}<PlayCircle className="w-3.5 h-3.5" /></a>
+                                    : bank.name}
+                                  <span className="text-gray-400"> ({x.n})</span>
+                                </>
+                              ) : x.n}
+                              {x.cl && <span className="ml-1 text-[11px] text-violet-700">clinician</span>} <span className="text-gray-500">— {x.d}</span>
+                            </li>
+                          );
+                        })}</ul>
                       </div>
                     ))}
                   </div>
