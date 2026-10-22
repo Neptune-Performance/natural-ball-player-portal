@@ -25,6 +25,7 @@ import { useModalTracking, trackAction } from './usage';
 import { FACILITY_FINE_ENABLED, FACILITY_FINE_LABEL } from './facilityFineDocument';
 import { MECHANICS_AREAS, mechanicsArea, mechanicsAreaLabel, mechanicsDeficiencyInfo } from './mechanicsDeficiencies';
 import RecruitingBoard from './RecruitingBoard';
+import { fetchCompletionRate, COMPLETION_WINDOW_DAYS } from './athleteCheckins';
 
 const EQUIPMENT_FIELDS = [
   { key: 'shirt', label: 'Shirt' },
@@ -530,6 +531,15 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
   const [sportInput, setSportInput] = useState('');
   const [sportDropdownOpen, setSportDropdownOpen] = useState(false);
   const [sportEditDropdownOpen, setSportEditDropdownOpen] = useState(false);
+  // #462: the athlete's own check-in completion over the last 30 days,
+  // shown next to their age. null = nothing scheduled (or not a player).
+  const [completionRate, setCompletionRate] = useState(null);
+  useEffect(() => {
+    if (!userId || userData?.role !== 'player') { setCompletionRate(null); return; }
+    let cancelled = false;
+    fetchCompletionRate(userId).then(r => { if (!cancelled) setCompletionRate(r); });
+    return () => { cancelled = true; };
+  }, [userId, userData?.role]);
   const avatarInputRef = useRef(null);
   const sportDropdownRef = useRef(null);
   const sportEditDropdownRef = useRef(null);
@@ -2256,6 +2266,14 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
                     const age = Math.floor((new Date() - new Date(userData.date_of_birth + 'T00:00:00')) / (365.25 * 24 * 60 * 60 * 1000));
                     return <span className="text-lg font-semibold text-gray-500 ml-2">· Age {age}</span>;
                   })()}
+                  {completionRate && (
+                    <span
+                      className={`ml-2 align-middle inline-block text-sm font-semibold px-2 py-0.5 rounded-full ${completionRate.pct >= 80 ? 'bg-green-100 text-green-700' : completionRate.pct >= 50 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`}
+                      title={`${completionRate.completed} of ${completionRate.scheduled} lifts and sessions marked completed in the last ${COMPLETION_WINDOW_DAYS} days`}
+                    >
+                      {completionRate.pct}% completed
+                    </span>
+                  )}
                 </h3>
               )}
               <p className="text-gray-600 capitalize mt-1">{userData.role}</p>
