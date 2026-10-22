@@ -82,6 +82,20 @@ export async function fetchLastLogs(playerId, nameKeys, onOrBefore, excludeEvent
   return byName;
 }
 
+// #461: every entry for one movement, oldest first, for the in-workout history.
+export async function fetchMovementHistory(playerId, exerciseName) {
+  const { data, error } = await supabase
+    .from('exercise_logs')
+    .select('id, weight, unit, reps_done, event_date, created_at')
+    .eq('player_id', playerId)
+    .eq('name_key', exerciseNameKey(exerciseName))
+    .order('event_date', { ascending: true })
+    .order('created_at', { ascending: true })
+    .limit(500);
+  if (error) throw error;
+  return data || [];
+}
+
 export async function saveExerciseLog({ event, playerId, exercise, weight, repsDone, createdBy }) {
   const { data, error } = await supabase
     .from('exercise_logs')

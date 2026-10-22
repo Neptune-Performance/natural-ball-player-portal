@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from './supabaseClient';
 import { fetchUserDirectory, readDirectory } from './userDirectory';
-import { Calendar as CalendarIcon, MessageSquare, ChevronLeft, ChevronRight, Plus, X, Users, User, UserCheck, Dumbbell, Utensils, Trash2, Edit2, Building, MapPin, AlignLeft, Repeat, Clock, Check, ClipboardList, Apple, Search, ExternalLink, CheckSquare, Copy, DollarSign, AlertTriangle, UserCog, LayoutGrid } from 'lucide-react';
+import { Calendar as CalendarIcon, MessageSquare, ChevronLeft, ChevronRight, Plus, X, Users, User, UserCheck, Dumbbell, Utensils, Trash2, Edit2, Building, MapPin, AlignLeft, Repeat, Clock, Check, ClipboardList, Apple, Search, ExternalLink, CheckSquare, History, Copy, DollarSign, AlertTriangle, UserCog, LayoutGrid } from 'lucide-react';
 import { fmtLocalDate, expandRecurringEvents, monthWeekRange, buildSlotExceptionMap, getSlotDateException, collectMovedSlots, upsertFacilityException, deleteFacilityOccurrence, deleteFacilitySeries, deleteFacilityFuture, countFacilitySeriesImpact, countSignupsForEvents, facilitySeriesDeleteWarning, DELETE_CANCELLED, placeProgramDays } from './scheduleUtils';
 import CalendarContextMenu from './CalendarContextMenu';
 import RecurrenceDecisionModal from './RecurrenceDecisionModal';
@@ -23,6 +23,7 @@ import { EventRsvpSection } from './EventRsvp';
 import { readAllPages } from './readAllPages';
 import PublicBookingPage from './PublicBookingPage'; // #452
 import ExerciseLogInput from './ExerciseLogInput'; // #460
+import ExerciseHistoryModal from './ExerciseHistoryModal'; // #461
 import { logOwnerForEvent, canLogWorkout, parseWeight, exerciseNameKey, fetchWorkoutLogs, fetchLastLogs, saveExerciseLog, deleteExerciseLog, MAX_WEIGHT } from './exerciseLogs';
 
 // #347 QA: every path that would wipe a whole facility series asks here first,
@@ -6114,6 +6115,7 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole, userId }) {
   const canLog = !!logPlayerId && canLogWorkout(event);
   const [logs, setLogs] = useState({});
   const [lastLogs, setLastLogs] = useState({});
+  const [historyFor, setHistoryFor] = useState(null); // #461: exercise name
 
   useEffect(() => {
     const load = async () => {
@@ -6290,7 +6292,13 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole, userId }) {
                                     </span>
                                   )}
                                   <div className="min-w-0">
-                                    <div className="font-semibold text-gray-900 break-words">{ex.name}</div>
+                                    {logPlayerId ? (
+                                      <button type="button" onClick={() => setHistoryFor(ex.name)} className="font-semibold text-gray-900 break-words text-left hover:text-blue-600 inline-flex items-center gap-1" title="See this movement's history">
+                                        {ex.name}<History size={13} className="text-gray-400 flex-shrink-0" />
+                                      </button>
+                                    ) : (
+                                      <div className="font-semibold text-gray-900 break-words">{ex.name}</div>
+                                    )}
                                     {ex.description && <div className="text-xs text-gray-500 mt-0.5 break-words">{ex.description}</div>}
                                   </div>
                                 </div>
@@ -6345,7 +6353,13 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole, userId }) {
                                       </span>
                                     )}
                                     <div>
-                                      <div className="font-medium text-gray-900">{ex.name}</div>
+                                      {logPlayerId ? (
+                                        <button type="button" onClick={() => setHistoryFor(ex.name)} className="font-medium text-gray-900 text-left hover:text-blue-600 inline-flex items-center gap-1" title="See this movement's history">
+                                          {ex.name}<History size={12} className="text-gray-400 flex-shrink-0" />
+                                        </button>
+                                      ) : (
+                                        <div className="font-medium text-gray-900">{ex.name}</div>
+                                      )}
                                       {ex.description && <div className="text-xs text-gray-500 mt-0.5">{ex.description}</div>}
                                     </div>
                                   </div>
@@ -6424,6 +6438,9 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole, userId }) {
           </div>
         )}
       </div>
+      {historyFor && logPlayerId && (
+        <ExerciseHistoryModal playerId={logPlayerId} exerciseName={historyFor} onClose={() => setHistoryFor(null)} />
+      )}
     </div>
   );
 }
