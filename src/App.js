@@ -27,6 +27,8 @@ import PublicBookingPage from './PublicBookingPage';
 import UnsubscribePage from './UnsubscribePage';
 import PublicPortal from './PublicPortal';
 import NotificationBell, { deletePendingPayment, dismissEventAssignment } from './NotificationBell';
+import CheckinModal from './CheckinModal';
+import { fetchTodayCheckinItems, openCheckinCount, checkinPromptedToday, markCheckinPrompted } from './athleteCheckins';
 import { formatUserError } from './errorMessage';
 import { initUsage, setUsageContext, trackView, trackViewExit } from './usage';
 import { useMainPortalCounts, useWorkPortalCounts, useWhoopNudge, dismissPtVisitNotice, markAllPtVisitNoticesSeen, dismissWeeklyReminder, dismissWhoopNudge } from './useNotifications';
@@ -997,6 +999,19 @@ function MainApp({ userRole, secondaryRole, userId, userName, userAvatar, onLogo
   const [birthdaySelf, setBirthdaySelf] = useState(false);
   const [birthdayPlayers, setBirthdayPlayers] = useState([]);
 
+  // #462: today's lift / session check-in (players only). Opens on its own
+  // once a day, after any other login popup is closed, and again from the
+  // bell's "Today's check-in" item until every item is answered / completed.
+  const [checkinItems, setCheckinItems] = useState([]);
+  const [showCheckin, setShowCheckin] = useState(false);
+  useEffect(() => {
+    if (effectiveRole !== 'player' || !userId) { setCheckinItems([]); return; }
+    let cancelled = false;
+    fetchTodayCheckinItems(userId).then(items => { if (!cancelled) setCheckinItems(items); })
+      .catch(e => console.error('Check-in items failed:', e));
+    return () => { cancelled = true; };
+  }, [userId, effectiveRole]);
+
   useEffect(() => {
     if (effectiveRole !== 'player' || !userId) return;
     let cancelled = false;
@@ -1126,6 +1141,13 @@ function MainApp({ userRole, secondaryRole, userId, userName, userAvatar, onLogo
     window.addEventListener('keydown', onEsc);
     return () => window.removeEventListener('keydown', onEsc);
   }, [showBirthday, showLessonReminder, showProfileReminder]);
+
+  useEffect(() => {
+    if (checkinItems.length === 0 || showBirthday || showLessonReminder || showProfileReminder) return;
+    if (checkinPromptedToday(userId)) return;
+    markCheckinPrompted(userId);
+    setShowCheckin(true);
+  }, [checkinItems, showBirthday, showLessonReminder, showProfileReminder, userId]);
 
   const mainCounts = useMainPortalCounts(userId, effectiveRole);
   const workCounts = useWorkPortalCounts(userId, effectiveRole);
@@ -1257,6 +1279,8 @@ function MainApp({ userRole, secondaryRole, userId, userName, userAvatar, onLogo
             onDismissWeeklyReminder={handleDismissWeeklyReminder}
             onOpenWhoopNudge={handleOpenWhoop}
             onDismissWhoopNudge={handleDismissWhoopNudge}
+            checkinOpenCount={openCheckinCount(checkinItems)}
+            onOpenCheckin={() => setShowCheckin(true)}
           />
         </div>
 
@@ -1415,6 +1439,10 @@ function MainApp({ userRole, secondaryRole, userId, userName, userAvatar, onLogo
             </div>
           </div>
         </div>
+      )}
+
+      {showCheckin && (
+        <CheckinModal userId={userId} items={checkinItems} onChange={setCheckinItems} onClose={() => setShowCheckin(false)} />
       )}
 
       {/* Birthday popup (#210) */}

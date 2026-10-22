@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bell, MessageSquare, Clock, Plane, ArrowLeftRight, Briefcase, Home, CreditCard, Trash2, AlertTriangle, Activity, CalendarPlus, HeartPulse, ClipboardList, X } from 'lucide-react';
+import { Bell, MessageSquare, Clock, Plane, ArrowLeftRight, Briefcase, Home, CreditCard, Trash2, AlertTriangle, Activity, CalendarPlus, HeartPulse, ClipboardList, Dumbbell, X } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import { formatUserError } from './errorMessage';
 import { PAYMENT_DUE_NOTICES_ENABLED } from './useNotifications';
@@ -99,7 +99,7 @@ function fmtDate(iso) {
   return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-export default function NotificationBell({ currentPortal, mainCounts, workCounts, onJump, userRole, onDeletePayment, needsWhoop, onOpenWhoop, onDismissEventAssignment, onOpenAthletePt, onDismissPtNotice, onDismissAllPtNotices, onOpenWeeklyReminder, onDismissWeeklyReminder, onOpenWhoopNudge, onDismissWhoopNudge }) {
+export default function NotificationBell({ currentPortal, mainCounts, workCounts, onJump, userRole, onDeletePayment, needsWhoop, onOpenWhoop, onDismissEventAssignment, onOpenAthletePt, onDismissPtNotice, onDismissAllPtNotices, onOpenWeeklyReminder, onDismissWeeklyReminder, onOpenWhoopNudge, onDismissWhoopNudge, checkinOpenCount = 0, onOpenCheckin }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -124,6 +124,7 @@ export default function NotificationBell({ currentPortal, mainCounts, workCounts
     // #438: this week's stats/PT check-in, until the athlete clears it.
     + (mainCounts?.weeklyReminders?.length || 0)
     + (mainCounts?.whoopNudges?.length || 0)
+    + (checkinOpenCount > 0 ? 1 : 0)
     // #224: the WHOOP nudge counts as one. It clears itself the moment the
     // athlete connects — useWhoopNudge only ever sets this when the server
     // says `connected === false`, so there is no state to reset by hand.
@@ -299,6 +300,23 @@ export default function NotificationBell({ currentPortal, mainCounts, workCounts
                 the athlete's Physical Therapy tab, where the existing RLS and
                 the existing screen decide what they see. Clicking dismisses
                 and navigates, as with #408; the X dismisses in place. */}
+            {/* #462: today's lift / session check-in, until every item is
+                answered and every "doing" item is marked completed. */}
+            {checkinOpenCount > 0 && onOpenCheckin && (
+              <button
+                onClick={() => { setOpen(false); onOpenCheckin(); }}
+                className="w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 transition"
+              >
+                <div className="flex items-start space-x-3">
+                  <div className="mt-0.5"><Dumbbell size={16} className="text-blue-600" /></div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-900 font-medium">Today's check-in</p>
+                    <p className="text-xs text-gray-600 mt-0.5">{checkinOpenCount} lift or session{checkinOpenCount === 1 ? '' : 's'} today to check in or mark completed</p>
+                  </div>
+                  {currentPortal !== 'main' && <PortalTag kind="main" />}
+                </div>
+              </button>
+            )}
             {/* #443: WHOOP coaching nudges (lift intensity, zone 5 time,
                 pre-game strain, sleep, fuelling). Click-through opens the
                 athlete's WHOOP tab and clears it; the X just clears it.
