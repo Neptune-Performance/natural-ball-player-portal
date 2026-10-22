@@ -22,6 +22,12 @@ project_id = "cjilkqzifyhssbsiqgfu"
 [functions.whoop-callback]
 verify_jwt = false
 
+# WooCommerce order webhooks from the public site (thenaturalballplayer.com).
+# Auth is the X-WC-Webhook-Signature HMAC-SHA256 of the raw body with
+# WOOCOMMERCE_WEBHOOK_SECRET, timing-safe compared.
+[functions.woocommerce-webhook]
+verify_jwt = false
+
 # Self-serve account creation. The caller has no account yet, so no JWT exists.
 [functions.signup]
 verify_jwt = false
