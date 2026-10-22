@@ -19,7 +19,8 @@ import ApplyDiscountModal from './ApplyDiscountModal';
 import AssignPackageModal from './AssignPackageModal';
 import PackagesModal from './PackagesModal';
 import MentalTrainingModal from './MentalTrainingModal';
-import { BadgePercent, CreditCard, Dumbbell } from 'lucide-react';
+import { BadgePercent, CreditCard, Dumbbell, TrendingUp } from 'lucide-react';
+import AssessmentTrends from './AssessmentTrends';
 import { formatUserError } from './errorMessage';
 import { useModalTracking, trackAction } from './usage';
 import { FACILITY_FINE_ENABLED, FACILITY_FINE_LABEL } from './facilityFineDocument';
@@ -2880,6 +2881,9 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
                       const completedCount = assessmentSubmissions.filter(s => s.template_id === template.id).length;
                       const latestSub = assessmentSubmissions.find(s => s.template_id === template.id);
                       const canSubmit = userRole === 'admin' || userRole === 'coach';
+                      // #456: a reassessment is always a new blank, dated
+                      // submission; the earlier ones are kept and trended.
+                      const trendKey = `trend-${template.id}`;
                       return (
                         <div key={template.id} className="border border-gray-200 rounded-lg overflow-hidden">
                           <div className="flex items-center justify-between px-4 py-3">
@@ -2901,7 +2905,16 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
                                   className="text-sm text-blue-600 hover:text-blue-800 font-medium flex items-center space-x-1"
                                 >
                                   <Plus size={14} />
-                                  <span>Submit</span>
+                                  <span>{completedCount > 0 ? 'Reassess' : 'Submit'}</span>
+                                </button>
+                              )}
+                              {completedCount >= 2 && (
+                                <button
+                                  onClick={() => setExpandedSubmission(expandedSubmission === trendKey ? null : trendKey)}
+                                  className="text-sm text-gray-500 hover:text-gray-700 font-medium flex items-center space-x-1"
+                                >
+                                  <TrendingUp size={14} />
+                                  <span>Trends</span>
                                 </button>
                               )}
                               {latestSub && (
@@ -2930,6 +2943,17 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
                                 </p>
                               )}
                               <SubmissionView submission={latestSub} ageGroupData={ageGroupAverages[latestSub.template_id]} />
+                            </div>
+                          )}
+                          {expandedSubmission === trendKey && (
+                            <div className="border-t border-gray-200 p-4 bg-gray-50">
+                              <p className="text-xs text-gray-500 mb-3">
+                                {completedCount} assessments, first to latest. Each change is against the previous assessment that recorded that number.
+                              </p>
+                              <AssessmentTrends
+                                schema={template.schema || latestSub?.assessment_templates?.schema || []}
+                                submissions={assessmentSubmissions.filter(s => s.template_id === template.id)}
+                              />
                             </div>
                           )}
                         </div>
