@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 import { readAllPages } from './readAllPages';
 import { scheduleProgramEvents } from './programScheduling';
-import { Plus, Calendar, Dumbbell, Utensils, TrendingUp, Target, X, Trash2, ChevronDown, ChevronUp, ChevronRight, Users, User, Play, ExternalLink, Clock, Check, XCircle, Edit2, Phone, Link, Search, Eye, EyeOff, GripVertical, ClipboardList, FileText } from 'lucide-react';
+import { Plus, Calendar, Dumbbell, Utensils, TrendingUp, Target, X, Trash2, ChevronDown, ChevronUp, ChevronRight, Users, User, Play, ExternalLink, Clock, Check, XCircle, Edit2, Phone, Link, Search, Eye, EyeOff, GripVertical, ClipboardList, FileText, RotateCcw } from 'lucide-react';
+import AssessmentTrends from './AssessmentTrends';
 import { formatUserError } from './errorMessage';
 import { buildSlotExceptionMap, getSlotDateException, collectMovedSlots } from './scheduleUtils';
 import { LANES } from './Schedule';
@@ -3251,6 +3252,11 @@ function AssessmentsTab({ players, userId }) {
   const [showFillModal, setShowFillModal] = useState(null);
   const [showViewModal, setShowViewModal] = useState(null);
   const [showEditModal, setShowEditModal] = useState(null);
+  // #456: { template, playerId } for "Reassess" (a NEW blank submission for
+  // the same athlete + template), and { template, playerName, submissions }
+  // for the trend view.
+  const [reassess, setReassess] = useState(null);
+  const [trendsFor, setTrendsFor] = useState(null);
 
   useEffect(() => { fetchTemplates(); fetchSubmissions(); }, []);
 
@@ -3263,13 +3269,20 @@ function AssessmentsTab({ players, userId }) {
     setLoading(false);
   };
 
+  // #437: there are 1,000+ submissions (1,023 on 2026-10-22), past the
+  // PostgREST row cap, so page through them.
   const fetchSubmissions = async () => {
-    const { data, error } = await supabase
+    const { rows, error } = await readAllPages(() => supabase
       .from('assessment_submissions')
       .select('*, assessment_templates(name), player:users!assessment_submissions_player_id_fkey(full_name), assessor:users!assessment_submissions_assessed_by_fkey(full_name)')
-      .order('created_at', { ascending: false });
-    if (!error) setSubmissions(data || []);
+      .order('created_at', { ascending: false })
+      .order('id'));
+    if (error) console.error('assessment submissions fetch failed:', error);
+    setSubmissions(rows);
   };
+
+  const submissionsFor = (playerId, templateId) =>
+    submissions.filter(x => x.player_id === playerId && x.template_id === templateId);
 
   const handleDeleteTemplate = async (id) => {
     if (!window.confirm('Delete this assessment template and all its submissions?')) return;
@@ -3384,10 +3397,28 @@ function AssessmentsTab({ players, userId }) {
                       </p>
                     </div>
                     <div className="flex items-center space-x-2 ml-4">
+                      {(() => {
+                        const template = templates.find(t => t.id === s.template_id);
+                        const history = submissionsFor(s.player_id, s.template_id);
+                        return (
+                          <>
+                            {template && (
+                              <button onClick={() => setReassess({ template, playerId: s.player_id })} className="text-gray-400 hover:text-green-600 transition" title="Reassess (new blank form; this one is kept)">
+                                <RotateCcw size={16} />
+                              </button>
+                            )}
+                            {template && history.length >= 2 && (
+                              <button onClick={() => setTrendsFor({ template, playerName: s.player?.full_name, submissions: history })} className="text-gray-400 hover:text-blue-600 transition" title={`Trends across ${history.length} assessments`}>
+                                <TrendingUp size={16} />
+                              </button>
+                            )}
+                          </>
+                        );
+                      })()}
                       <button onClick={() => setShowViewModal(s)} className="text-gray-400 hover:text-blue-600 transition" title="View">
                         <Eye size={16} />
                       </button>
-                      <button onClick={() => setShowEditModal(s)} className="text-gray-400 hover:text-blue-600 transition" title="Edit">
+                      <button onClick={() => setShowEditModal(s)} className="text-gray-400 hover:text-blue-600 transition" title="Edit this assessment (to record a new one, use Reassess)">
                         <Edit2 size={16} />
                       </button>
                       <button onClick={() => handleDeleteSubmission(s.id)} className="text-gray-400 hover:text-red-600 transition" title="Delete">
@@ -3419,6 +3450,35 @@ function AssessmentsTab({ players, userId }) {
           onClose={() => setShowFillModal(null)}
           onSuccess={() => { setShowFillModal(null); fetchSubmissions(); }}
         />
+      )}
+
+      {reassess && (
+        <FillAssessmentModal
+          template={reassess.template}
+          templates={[reassess.template]}
+          players={players}
+          userId={userId}
+          initialPlayerId={reassess.playerId}
+          onClose={() => setReassess(null)}
+          onSuccess={() => { setReassess(null); fetchSubmissions(); }}
+        />
+      )}
+
+      {trendsFor && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+            <div className="border-b border-gray-200 p-6 flex items-center justify-between shrink-0">
+              <div>
+                <h3 className="text-xl font-bold text-gray-900">{trendsFor.template.name} trends</h3>
+                <p className="text-sm text-gray-500">{trendsFor.playerName || 'Athlete'} · {trendsFor.submissions.length} assessments</p>
+              </div>
+              <button onClick={() => setTrendsFor(null)} className="text-gray-400 hover:text-gray-600"><X size={24} /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              <AssessmentTrends schema={trendsFor.template.schema || []} submissions={trendsFor.submissions} />
+            </div>
+          </div>
+        </div>
       )}
 
       {showViewModal && (
@@ -3673,12 +3733,12 @@ function CreateAssessmentTemplateModal({ editingTemplate, onClose, onSuccess }) 
    FILL ASSESSMENT MODAL
    ============================================ */
 
-function FillAssessmentModal({ template, templates, players, userId, editingSubmission, onClose, onSuccess }) {
+function FillAssessmentModal({ template, templates, players, userId, editingSubmission, initialPlayerId, onClose, onSuccess }) {
   useModalTracking('FillAssessmentModal');
   const [selectedTemplate, setSelectedTemplate] = useState(
     editingSubmission ? (templates.find(t => t.id === editingSubmission.template_id) || template) : template
   );
-  const [playerId, setPlayerId] = useState(editingSubmission?.player_id || '');
+  const [playerId, setPlayerId] = useState(editingSubmission?.player_id || initialPlayerId || '');
   const [assessmentDate, setAssessmentDate] = useState(editingSubmission?.assessment_date || fmtLocalDate(new Date()));
   const [responses, setResponses] = useState(editingSubmission?.responses || {});
   const [notes, setNotes] = useState(editingSubmission?.notes || '');
@@ -3734,11 +3794,16 @@ function FillAssessmentModal({ template, templates, players, userId, editingSubm
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[90vh] flex flex-col">
         <div className="border-b border-gray-200 p-6 flex items-center justify-between shrink-0">
-          <h3 className="text-xl font-bold text-gray-900">{editingSubmission ? 'Edit Assessment' : 'Fill Out Assessment'}</h3>
+          <h3 className="text-xl font-bold text-gray-900">{editingSubmission ? 'Edit Assessment' : initialPlayerId ? 'Reassess' : 'Fill Out Assessment'}</h3>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={24} /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
           {error && <div className="bg-red-50 text-red-700 px-4 py-2 rounded-lg text-sm">{error}</div>}
+          {editingSubmission && (
+            <div className="bg-amber-50 text-amber-800 px-4 py-2 rounded-lg text-sm">
+              This corrects the {editingSubmission.assessment_date} assessment. To record a new one, close this and use Reassess so the earlier numbers are kept for trends.
+            </div>
+          )}
 
           {/* Template selector */}
           {templates.length > 1 && (
