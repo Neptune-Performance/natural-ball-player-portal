@@ -12,7 +12,7 @@ import CalendarSyncModal from './CalendarSyncModal';
 import MessageCoachModal from './MessageCoachModal'; // #407
 import { formatUserError } from './errorMessage';
 import { useModalTracking, trackAction } from './usage';
-import { COACH_SKILL_OPTIONS } from './skillOptions';
+import { COACH_SKILL_OPTIONS, SC_SKILL } from './skillOptions';
 import { allowancesForPurchases, sessionClass, weekRangeForDate, capWarningMessage, weeklyFrequencyFromName, SESSION_SC } from './bookingCaps';
 import { CreateUserModal } from './AdminSettings';
 import { familyKey, familyLabel, sameFamily } from './productFamily';
@@ -1354,7 +1354,8 @@ export default function Schedule({ userId, userRole, onMessageCoach, initialMode
     const [evRes, asgRes, slotRes, pubRes] = await Promise.all([
       supabase.from('staff_schedule_events').select('*').gte('start_at', dayStart.toISOString()).lte('start_at', dayEnd.toISOString()).order('start_at'),
       supabase.from('staff_schedule_assignments').select('id, event_id, user_id, role, user:user_id(full_name, avatar_url)'),
-      supabase.from('training_slots').select('*'),
+      // 846 rows on 2026-10-26 — page past PostgREST's silent 1,000-row cap.
+      readAllPages(() => supabase.from('training_slots').select('*').order('id')).then(({ rows, error }) => ({ data: rows, error })),
       supabase.from('public_bookings').select('source_type, source_id, guest_name, status').eq('occurrence_date', dateStr).in('status', ['pending_payment', 'confirmed']),
     ]);
     if (slotRes.error) console.error('fetchStaffSchedule: training_slots query failed:', slotRes.error);
@@ -1404,6 +1405,7 @@ export default function Schedule({ userId, userRole, onMessageCoach, initialMode
       title: s.notes || 'Training slot',
       is_public: !!s.is_public,
       lanes: s.lanes || [],
+      session_type: s.session_type || null,
       capacity: s.max_players || 1,
       reserved: resCount[s.id] || 0,
       publicBookings: pubBySlot[s.id] || [],
@@ -3850,12 +3852,38 @@ function LaneView({ selectedDate, events, laneDate, setLaneDate, canManage, onCe
     });
   });
 
+  // #466: lessons with no lane picked are placed automatically — the day's
+  // coaches sorted A→Z take Lane 1, 2, 3… for all their lessons that day
+  // (Cordell: "Brendan in lane one, Cordell in lane two and Dylan in lane
+  // three"). Coaches past Lane 7 stay in the Staff Schedule band only. S&C
+  // sessions run in the weight rooms, so they never claim a hitting lane:
+  // session_type 'sc', or (unset) a coach whose only skill is S&C. NOT
+  // sessionClass() — that treats any S&C tag as lifting, and most skills
+  // coaches carry one.
+  const cageLanes = LANES.filter(l => l.startsWith('Lane '));
+  const isScOnlySlot = (s) => {
+    if (s.session_type === 'sc') return true;
+    if (s.session_type) return false;
+    const skills = coaches.find(c => c.id === s.coach_id)?.skills || [];
+    return skills.length > 0 && skills.every(sk => String(sk).trim().toLowerCase() === SC_SKILL.toLowerCase());
+  };
+  const autoLaneCoachIds = [...new Set(coachDaySlots
+    .filter(s => (s.lanes || []).length === 0 && !isScOnlySlot(s))
+    .map(s => s.coach_id))]
+    .sort((a, b) => {
+      const na = coaches.find(c => c.id === a)?.full_name || '￿';
+      const nb = coaches.find(c => c.id === b)?.full_name || '￿';
+      return na.localeCompare(nb) || String(a).localeCompare(String(b));
+    });
+  const autoLaneByCoach = Object.fromEntries(autoLaneCoachIds.slice(0, cageLanes.length).map((id, i) => [id, cageLanes[i]]));
+
   // #434: coach lessons that reserved a lane render in the lane rows too, so
   // staff see lane availability without cross-checking the Staff Schedule
   // band. Pseudo-events: not draggable here (retime them in the staff band,
   // #309), click opens the coach's session tools like the band entry does.
   coachDaySlots.forEach(s => {
-    const slotLanes = s.lanes || [];
+    const autoLane = (s.lanes || []).length === 0 && !isScOnlySlot(s) ? autoLaneByCoach[s.coach_id] : null;
+    const slotLanes = autoLane ? [autoLane] : (s.lanes || []);
     if (slotLanes.length === 0) return;
     const startIdx = timeToIndex(s.start_time);
     if (startIdx < 0) return;
@@ -3878,6 +3906,7 @@ function LaneView({ selectedDate, events, laneDate, setLaneDate, canManage, onCe
       lanes: slotLanes,
       coach_id: s.coach_id,
       _booked_count: clients,
+      _autoLane: !!autoLane,
     };
     slotLanes.forEach(lane => {
       if (laneEvents[lane]) laneEvents[lane].push({ startIdx, span, event: pseudo });
@@ -4135,6 +4164,7 @@ function LaneView({ selectedDate, events, laneDate, setLaneDate, canManage, onCe
                         entryCoachNames.length ? `Coach: ${entryCoachNames.join(', ')}` : null,
                         entry.event.athlete?.full_name ? `Athlete: ${entry.event.athlete.full_name}` : null,
                         entry.event._isSlot ? 'Coach lesson (also on the Staff Schedule band)' : null,
+                        entry.event._autoLane ? 'Lane auto-assigned (coaches A→Z); pick a lane on the session to override' : null,
                         entry.event._isSlot
                           ? (entry.event._booked_count > 0 ? `Booked: ${entry.event._booked_count}/${entry.event._capacity}` : 'Unbooked')
                           : (entry.event._booked_count > 0 ? `Booked: ${entry.event._booked_count}` : null),
@@ -9312,6 +9342,14 @@ function CreateSlotPanel({ onClose, onSuccess, coachId, coachName, initialDate, 
     // #249: allow $0 (free) sessions — reject only blank / negative / non-numeric.
     if (isPublic && !(parseFloat(publicPrice) >= 0)) return alert('Enter a price for public booking (0 for free)');
     if (isSubscriptionSession && storeProductIds.length === 0) return alert('Choose at least one package or membership for this session');
+    // #468: a typed 5-digit year ("20265-09-02") was accepted and made the
+    // series repeat forever in Chrome while Safari dropped it entirely.
+    const plausibleDate = (d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && d >= '2020-01-01' && d <= '2099-12-31';
+    if (!plausibleDate(slotDate)) return alert('Enter a valid session date');
+    if (repeatWeekly && repeatEndDate) {
+      if (!plausibleDate(repeatEndDate)) return alert('Enter a valid "Repeat until" date');
+      if (repeatEndDate < slotDate) return alert('"Repeat until" must be on or after the first session date');
+    }
     const publicFields = {
       is_public: isPublic,
       public_price_cents: isPublic ? Math.round(parseFloat(publicPrice) * 100) : null,
@@ -9432,7 +9470,7 @@ function CreateSlotPanel({ onClose, onSuccess, coachId, coachName, initialDate, 
                   <p className="text-xs text-gray-500 mt-1">First occurrence of each weekday on/after the start date becomes the master slot.</p>
                 </div>
               )}
-              <div><label className="block text-sm font-medium text-gray-700 mb-1">Repeat until</label><input type="date" value={repeatEndDate} onChange={(e) => setRepeatEndDate(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500" /></div>
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">Repeat until</label><input type="date" min={slotDate || undefined} max="2099-12-31" value={repeatEndDate} onChange={(e) => setRepeatEndDate(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500" /></div>
             </>
           )}
           <div><label className="block text-sm font-medium text-gray-700 mb-1">Notes (optional)</label><textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g., Hitting session, Pitching mechanics" rows="2" className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500" /></div>

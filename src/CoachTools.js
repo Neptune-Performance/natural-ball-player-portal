@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 import { readAllPages } from './readAllPages';
 import { scheduleProgramEvents } from './programScheduling';
-import { Plus, Calendar, Dumbbell, Utensils, TrendingUp, Target, X, Trash2, ChevronDown, ChevronUp, ChevronRight, Users, User, Play, ExternalLink, Clock, Check, XCircle, Edit2, Phone, Link, Search, Eye, EyeOff, GripVertical, ClipboardList, FileText, RotateCcw } from 'lucide-react';
+import { Plus, Calendar, Dumbbell, Utensils, TrendingUp, Target, X, Trash2, ChevronDown, ChevronUp, ChevronRight, Users, User, Play, ExternalLink, Clock, Check, XCircle, Edit2, Phone, Link, Search, Eye, EyeOff, GripVertical, ClipboardList, FileText, RotateCcw, Activity, AlertTriangle } from 'lucide-react';
 import AssessmentTrends from './AssessmentTrends';
 import { formatUserError } from './errorMessage';
 import { buildSlotExceptionMap, getSlotDateException, collectMovedSlots } from './scheduleUtils';
@@ -35,7 +35,7 @@ export default function CoachTools({ userRole, userId, onNavigateToProfile }) {
     // #437: paged past the 1,000-row clamp.
     const { rows, error } = await readAllPages(() => supabase
       .from('users')
-      .select('id, full_name, email, player_profiles!player_profiles_user_id_fkey(position, jersey_number, level), team_members(team_id, teams(name))')
+      .select('id, full_name, email, player_profiles!player_profiles_user_id_fkey(position, jersey_number, level), team_members(team_id, teams(name, team_type))')
       .or('role.eq.player,secondary_role.eq.player')
       .order('full_name')
       .order('id'));
@@ -50,6 +50,7 @@ export default function CoachTools({ userRole, userId, onNavigateToProfile }) {
     { key: 'schedule', icon: Calendar, label: 'Schedule' },
     { key: 'stats', icon: TrendingUp, label: 'Player Stats' },
     { key: 'registrations', icon: FileText, label: 'Registrations' },
+    { key: 'whoop', icon: Activity, label: 'WHOOP' },
     { key: 'benchmarks', icon: Target, label: 'Assessments' },
     { key: 'slots', icon: Clock, label: 'Training Slots' },
     { key: 'tasks', icon: ClipboardList, label: 'My Tasks' },
@@ -76,6 +77,7 @@ export default function CoachTools({ userRole, userId, onNavigateToProfile }) {
           {activeTab === 'schedule' && <ScheduleTab teams={teams} />}
           {activeTab === 'stats' && <PlayerStatsTab players={players} onNavigateToProfile={onNavigateToProfile} />}
           {activeTab === 'registrations' && <RegistrationsTab players={players} onNavigateToProfile={onNavigateToProfile} />}
+          {activeTab === 'whoop' && <WhoopConnectionsTab players={players} onNavigateToProfile={onNavigateToProfile} />}
           {activeTab === 'benchmarks' && <AssessmentsTab players={players} userId={userId} />}
           {activeTab === 'slots' && <TrainingSlotsTab userId={userId} />}
           {activeTab === 'tasks' && <MyTasksTab userId={userId} />}
@@ -4290,6 +4292,167 @@ function PlayerStatsTab({ players, onNavigateToProfile }) {
               ))}
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================
+   WHOOP TAB (#467) — who has linked WHOOP and who hasn't
+   ============================================ */
+// A connection whose newest WHOOP cycle is older than this reads as stale:
+// still linked, but the band hasn't sent data (not worn, dead, or revoked).
+const WHOOP_STALE_DAYS = 3;
+
+function WhoopConnectionsTab({ players, onNavigateToProfile }) {
+  const [status, setStatus] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [teamFilter, setTeamFilter] = useState('all');
+  const [show, setShow] = useState('not_connected');
+  const [nbpPlusOnly, setNbpPlusOnly] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      // whoop_tokens holds encrypted OAuth tokens and is not client-readable;
+      // the staff-gated RPC returns connection status only.
+      const { data, error } = await supabase.rpc('whoop_connection_status');
+      if (cancelled) return;
+      if (error) console.error('Error loading WHOOP connections:', error);
+      setStatus(Object.fromEntries((data || []).map(r => [r.user_id, r])));
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const daysSince = (dateStr) => Math.round((new Date(todayStr + 'T00:00:00') - new Date(dateStr + 'T00:00:00')) / 86400000);
+  const stateOf = (s) => {
+    if (!s) return 'not_connected';
+    if (s.last_sync_error || !s.last_cycle_date || daysSince(s.last_cycle_date) > WHOOP_STALE_DAYS) return 'stale';
+    return 'connected';
+  };
+
+  const isNbpPlus = (p) => (p.team_members || []).some(tm => tm.teams?.team_type === 'training');
+  const teamNames = Array.from(new Set((players || []).flatMap(p => (p.team_members || []).map(tm => tm.teams?.name).filter(Boolean)))).sort();
+
+  const scoped = (players || []).filter(p => {
+    if (nbpPlusOnly && !isNbpPlus(p)) return false;
+    if (teamFilter !== 'all' && !(p.team_members || []).some(tm => tm.teams?.name === teamFilter)) return false;
+    return true;
+  });
+  const counts = { connected: 0, stale: 0, not_connected: 0 };
+  scoped.forEach(p => { counts[stateOf(status[p.id])] += 1; });
+
+  const q = search.trim().toLowerCase();
+  const list = scoped.map(p => ({ player: p, s: status[p.id] || null, state: stateOf(status[p.id]), teams: (p.team_members || []).map(tm => tm.teams?.name).filter(Boolean) }))
+    .filter(item => {
+      if (show === 'connected' && item.state === 'not_connected') return false;
+      if (show === 'not_connected' && item.state !== 'not_connected') return false;
+      if (show === 'stale' && item.state !== 'stale') return false;
+      if (!q) return true;
+      return (item.player.full_name || '').toLowerCase().includes(q) || (item.player.email || '').toLowerCase().includes(q);
+    })
+    .sort((a, b) => (a.player.full_name || '').localeCompare(b.player.full_name || ''));
+
+  const fmt = (v) => new Date(v.length === 10 ? v + 'T00:00:00' : v).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const STATE_CHIP = {
+    connected: { cls: 'bg-green-50 text-green-700', icon: Check, label: 'Connected' },
+    stale: { cls: 'bg-amber-50 text-amber-700', icon: AlertTriangle, label: 'No recent data' },
+    not_connected: { cls: 'bg-gray-100 text-gray-600', icon: XCircle, label: 'Not connected' },
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-lg font-semibold text-gray-900">WHOOP Connections</h3>
+        <p className="text-sm text-gray-600 mt-0.5">
+          Which athletes have linked a WHOOP. Athletes connect theirs from the <span className="font-medium">WHOOP</span> tab on their profile.
+          "No recent data" = linked, but nothing synced in the last {WHOOP_STALE_DAYS} days or the last sync failed.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-2 items-center">
+        <div className="relative flex-1 min-w-[200px]">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search athlete..."
+            className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <select
+          value={teamFilter}
+          onChange={(e) => setTeamFilter(e.target.value)}
+          className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="all">All teams</option>
+          {teamNames.map(n => <option key={n} value={n}>{n}</option>)}
+        </select>
+        <select
+          value={show}
+          onChange={(e) => setShow(e.target.value)}
+          className="px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="not_connected">Not connected</option>
+          <option value="connected">Connected</option>
+          <option value="stale">No recent data</option>
+          <option value="all">Everyone</option>
+        </select>
+        <label className="inline-flex items-center space-x-2 text-sm text-gray-700 cursor-pointer">
+          <input type="checkbox" checked={nbpPlusOnly} onChange={(e) => setNbpPlusOnly(e.target.checked)} className="rounded" />
+          <span>NBP+ only</span>
+        </label>
+      </div>
+
+      <div className="flex flex-wrap gap-4 text-xs text-gray-500">
+        <span><span className="font-semibold text-gray-900">{counts.connected + counts.stale}</span> of {scoped.length} connected</span>
+        {counts.stale > 0 && <span><span className="font-semibold text-amber-700">{counts.stale}</span> with no recent data</span>}
+        <span><span className="font-semibold text-gray-900">{counts.not_connected}</span> not connected</span>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-gray-500">Loading...</p>
+      ) : list.length === 0 ? (
+        <div className="text-center py-10 border border-dashed border-gray-300 rounded-lg">
+          <Activity size={28} className="mx-auto text-gray-300 mb-2" />
+          <p className="text-sm text-gray-500">No athletes match.</p>
+        </div>
+      ) : (
+        <div className="border border-gray-200 rounded-lg overflow-hidden">
+          <div className="hidden md:grid grid-cols-[1.4fr_1fr_1fr_1fr] gap-2 px-4 py-2 bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wide">
+            <span>Athlete</span><span>Status</span><span>Connected</span><span>Latest data</span>
+          </div>
+          <div className="divide-y divide-gray-100">
+            {list.map(({ player, s, state, teams }) => {
+              const chip = STATE_CHIP[state];
+              const ChipIcon = chip.icon;
+              return (
+                <div key={player.id} className="grid grid-cols-1 md:grid-cols-[1.4fr_1fr_1fr_1fr] gap-2 px-4 py-3 items-center">
+                  <button
+                    onClick={() => onNavigateToProfile && onNavigateToProfile(player.id)}
+                    className="flex items-center space-x-2 min-w-0 text-left hover:text-blue-600"
+                  >
+                    <User size={16} className="text-gray-400 flex-shrink-0" />
+                    <span className="font-medium text-gray-900 truncate">{player.full_name}</span>
+                    {teams.length > 0 && <span className="text-xs text-gray-400 truncate hidden lg:inline">{teams.join(', ')}</span>}
+                  </button>
+                  <div>
+                    <span className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-xs font-medium ${chip.cls}`} title={s?.last_sync_error || undefined}>
+                      <ChipIcon size={12} /><span>{chip.label}</span>
+                    </span>
+                  </div>
+                  <span className="text-sm text-gray-600"><span className="md:hidden text-xs text-gray-500 mr-1">Connected</span>{s ? fmt(s.connected_at) : '—'}</span>
+                  <span className="text-sm text-gray-600"><span className="md:hidden text-xs text-gray-500 mr-1">Latest data</span>{s?.last_cycle_date ? fmt(s.last_cycle_date) : '—'}</span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
