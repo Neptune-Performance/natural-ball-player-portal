@@ -29,6 +29,7 @@ import { MECHANICS_AREAS, mechanicsArea, mechanicsAreaLabel, mechanicsDeficiency
 import RecruitingBoard from './RecruitingBoard';
 import { fetchCompletionRate, COMPLETION_WINDOW_DAYS } from './athleteCheckins';
 import { fetchWhoopStatus, WHOOP_STALE_DAYS } from './whoopStatus';
+import PlayerCard from './PlayerCard'; // #474
 
 const EQUIPMENT_FIELDS = [
   { key: 'shirt', label: 'Shirt' },
@@ -49,6 +50,9 @@ const SPORT_OPTIONS = ['Baseball', 'Basketball', 'Football', 'Soccer', 'Cricket'
 
 const PROFILE_TABS = [
   { key: 'general', label: 'General' },
+  // #474: MLB The Show style ratings card. Player profiles only; a player
+  // only ever reaches their own profile (refused above the tab bar).
+  { key: 'card', label: 'Player Card', viewedRoles: ['player'] },
   { key: 'athletes', label: 'Athletes', viewedRoles: ['coach', 'admin'] },
   // #226: Programming was merged into Schedule (they function the same). The
   // Schedule tab now renders the calendar followed by the programming list.
@@ -94,7 +98,7 @@ const PROFILE_TABS = [
 // blank page, and removing the content without removing them would have shown
 // "Coming Soon" over nothing. Both go, together.
 const PROFILE_TABS_WITH_CONTENT = [
-  'general', 'athletes', 'schedule', 'technology', 'stats', 'health',
+  'general', 'card', 'athletes', 'schedule', 'technology', 'stats', 'health',
   'recruitment', 'records', 'communication',
 ];
 
@@ -2793,6 +2797,10 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
 
           {activeProfileTab === 'technology' && activeTechSubTab === 'trackman' && (
             <TrackmanTab userId={userId} userRole={userRole} loggedInUserId={loggedInUserId} />
+          )}
+
+          {activeProfileTab === 'card' && (
+            <PlayerCard userId={userId} userRole={userRole} loggedInUserId={loggedInUserId} />
           )}
 
           {activeProfileTab === 'stats' && activeStatsSubTab === 'external' && (
