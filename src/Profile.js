@@ -20,7 +20,7 @@ import ApplyDiscountModal from './ApplyDiscountModal';
 import AssignPackageModal from './AssignPackageModal';
 import PackagesModal from './PackagesModal';
 import MentalTrainingModal from './MentalTrainingModal';
-import { BadgePercent, CreditCard, Dumbbell, TrendingUp } from 'lucide-react';
+import { BadgePercent, CreditCard, Dumbbell, TrendingUp, HeartPulse } from 'lucide-react';
 import AssessmentTrends from './AssessmentTrends';
 import { formatUserError } from './errorMessage';
 import { useModalTracking, trackAction } from './usage';
@@ -28,6 +28,7 @@ import { FACILITY_FINE_ENABLED, FACILITY_FINE_LABEL } from './facilityFineDocume
 import { MECHANICS_AREAS, mechanicsArea, mechanicsAreaLabel, mechanicsDeficiencyInfo } from './mechanicsDeficiencies';
 import RecruitingBoard from './RecruitingBoard';
 import { fetchCompletionRate, COMPLETION_WINDOW_DAYS } from './athleteCheckins';
+import { fetchWhoopStatus, WHOOP_STALE_DAYS } from './whoopStatus';
 
 const EQUIPMENT_FIELDS = [
   { key: 'shirt', label: 'Shirt' },
@@ -552,6 +553,16 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
     if (!userId || userData?.role !== 'player') { setCompletionRate(null); return; }
     let cancelled = false;
     fetchCompletionRate(userId).then(r => { if (!cancelled) setCompletionRate(r); });
+    return () => { cancelled = true; };
+  }, [userId, userData?.role]);
+  // #473: WHOOP heartbeat next to the age. Green = linked and syncing; red =
+  // not linked or no recent data, and clicking it opens the WHOOP section to
+  // connect. null = not a player or the status read failed (no icon).
+  const [whoopStatus, setWhoopStatus] = useState(null);
+  useEffect(() => {
+    if (!userId || userData?.role !== 'player') { setWhoopStatus(null); return; }
+    let cancelled = false;
+    fetchWhoopStatus(userId).then(s => { if (!cancelled) setWhoopStatus(s); });
     return () => { cancelled = true; };
   }, [userId, userData?.role]);
   const avatarInputRef = useRef(null);
@@ -2285,6 +2296,21 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
                     const age = Math.floor((new Date() - new Date(userData.date_of_birth + 'T00:00:00')) / (365.25 * 24 * 60 * 60 * 1000));
                     return <span className="text-lg font-semibold text-gray-500 ml-2">· Age {age}</span>;
                   })()}
+                  {whoopStatus && (
+                    <button
+                      type="button"
+                      onClick={() => { setActiveProfileTab('technology'); setTechSubTab('whoop'); }}
+                      className={`ml-2 align-middle inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${whoopStatus === 'connected' ? 'bg-green-100 text-green-700 hover:bg-green-200' : 'bg-red-100 text-red-700 hover:bg-red-200'}`}
+                      title={whoopStatus === 'connected'
+                        ? 'WHOOP connected and syncing'
+                        : whoopStatus === 'stale'
+                          ? `WHOOP linked, but no data in the last ${WHOOP_STALE_DAYS} days. Click to check the connection.`
+                          : 'WHOOP not connected. Click to connect.'}
+                    >
+                      <HeartPulse className="w-4 h-4" />
+                      WHOOP
+                    </button>
+                  )}
                   {completionRate && (
                     <span
                       className={`ml-2 align-middle inline-block text-sm font-semibold px-2 py-0.5 rounded-full ${completionRate.pct >= 80 ? 'bg-green-100 text-green-700' : completionRate.pct >= 50 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`}
