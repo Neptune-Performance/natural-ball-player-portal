@@ -18,7 +18,14 @@ import { REGISTRATION_SITES, REGISTRATIONS_BUCKET, hasRegistrationProof } from '
 const fmtLocalDate = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 
 export default function CoachTools({ userRole, userId, onNavigateToProfile }) {
-  const [activeTab, setActiveTab] = useState('schedule');
+  // #469: ?view=tasks (coach task emails) hands off 'tasks' via sessionStorage.
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      const t = sessionStorage.getItem('nbp_coachtools_tab');
+      if (t) { sessionStorage.removeItem('nbp_coachtools_tab'); return t; }
+    } catch {}
+    return 'schedule';
+  });
   const [teams, setTeams] = useState([]);
   const [players, setPlayers] = useState([]);
   const [loading, setLoading] = useState(true);

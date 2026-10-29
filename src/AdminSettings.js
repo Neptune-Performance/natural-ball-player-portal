@@ -8,6 +8,7 @@ import { COACH_SKILL_OPTIONS, SC_SKILL } from './skillOptions';
 import { allowanceForName, stripFrequencySuffix, LIFTING_WEEKLY_CAP } from './bookingCaps';
 import BulkTagFacilityEventTeams from './BulkTagFacilityEventTeams';
 import SoftwareDownloads from './SoftwareDownloads';
+import { notifyTasksAssigned, fetchLastNotified, formatNotifiedAt } from './coachTaskNotify';
 
 async function deleteAuthUser(userId) {
   const { data: { session } } = await supabase.auth.getSession();
@@ -4030,6 +4031,10 @@ function CoachTasksTab({ coaches, userId }) {
   const [filterFrequency, setFilterFrequency] = useState('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingTask, setEditingTask] = useState(null);
+  // #469: last successful notification per task / per coach's daily digest,
+  // and a small inline note about the most recent on-assign send.
+  const [notified, setNotified] = useState({ byTask: {}, byCoachDaily: {} });
+  const [notifyNote, setNotifyNote] = useState(null);
 
   const fetchTasks = async () => {
     const { data, error } = await supabase
@@ -4038,6 +4043,23 @@ function CoachTasksTab({ coaches, userId }) {
       .order('created_at', { ascending: false });
     if (error) console.error('Error fetching coach tasks:', error);
     else setTasks(data || []);
+    setNotified(await fetchLastNotified());
+  };
+
+  // Fire-and-forget after the task is saved: the modal has already closed,
+  // a failure only leaves a note above the list.
+  const notifyAssigned = async (taskIds) => {
+    if (!taskIds?.length) return;
+    setNotifyNote({ tone: 'info', text: 'Notifying coach…' });
+    const r = await notifyTasksAssigned(taskIds);
+    if (!r.ok) {
+      setNotifyNote({ tone: 'error', text: `Task saved, but the notification didn't send: ${r.error || 'unknown error'}` });
+    } else if (r.sent > 0) {
+      setNotifyNote({ tone: 'ok', text: `Notification sent (${r.sent} message${r.sent === 1 ? '' : 's'}).` });
+    } else {
+      setNotifyNote({ tone: 'info', text: 'Task saved. No notification went out (no email on file, or already notified).' });
+    }
+    setNotified(await fetchLastNotified());
   };
 
   useEffect(() => { fetchTasks(); }, []);
@@ -4093,6 +4115,14 @@ function CoachTasksTab({ coaches, userId }) {
         {counts.overdue > 0 && <span className="px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-700">Overdue: {counts.overdue}</span>}
       </div>
 
+      <p className="text-xs text-gray-500">Coaches are emailed each task when it's assigned, plus a 7am digest of today's daily, due and overdue tasks.</p>
+      {notifyNote && (
+        <div className={`flex items-start justify-between gap-3 px-3 py-2 rounded-lg text-sm ${notifyNote.tone === 'error' ? 'bg-red-50 text-red-700 border border-red-200' : notifyNote.tone === 'ok' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-gray-50 text-gray-600 border border-gray-200'}`}>
+          <span>{notifyNote.text}</span>
+          <button onClick={() => setNotifyNote(null)} className="shrink-0 opacity-70 hover:opacity-100"><X size={14} /></button>
+        </div>
+      )}
+
       {/* Filter bar */}
       <div className="bg-white border border-gray-200 rounded-lg p-3 flex flex-wrap items-center gap-2">
         <div className="relative flex-1 min-w-[200px]">
@@ -4140,6 +4170,14 @@ function CoachTasksTab({ coaches, userId }) {
                     {task.due_date && <span className="flex items-center gap-1"><Calendar size={14} /> Due: {task.due_date}</span>}
                   </div>
                   {task.description && <p className="text-sm text-gray-600 mt-1 line-clamp-2">{task.description}</p>}
+                  {(notified.byTask[task.id] || (task.status !== 'completed' && notified.byCoachDaily[task.assigned_to])) && (
+                    <p className="flex items-center gap-1 mt-1 text-xs text-gray-400">
+                      <Mail size={12} />
+                      {notified.byTask[task.id] && <span>Notified {formatNotifiedAt(notified.byTask[task.id].sent_at)} ({notified.byTask[task.id].channel})</span>}
+                      {notified.byTask[task.id] && task.status !== 'completed' && notified.byCoachDaily[task.assigned_to] && <span>·</span>}
+                      {task.status !== 'completed' && notified.byCoachDaily[task.assigned_to] && <span>Coach's last digest {formatNotifiedAt(notified.byCoachDaily[task.assigned_to].sent_at)}</span>}
+                    </p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 ml-4">
                   <button onClick={() => setEditingTask(task)} className="text-blue-600 hover:text-blue-800"><Edit2 size={16} /></button>
@@ -4151,8 +4189,8 @@ function CoachTasksTab({ coaches, userId }) {
         </div>
       )}
 
-      {showCreateModal && <CreateTaskModal coaches={coaches} userId={userId} onClose={() => setShowCreateModal(false)} onSuccess={() => { setShowCreateModal(false); fetchTasks(); }} />}
-      {editingTask && <EditTaskModal task={editingTask} coaches={coaches} onClose={() => setEditingTask(null)} onSuccess={() => { setEditingTask(null); fetchTasks(); }} />}
+      {showCreateModal && <CreateTaskModal coaches={coaches} userId={userId} onClose={() => setShowCreateModal(false)} onSuccess={(newIds) => { setShowCreateModal(false); fetchTasks(); notifyAssigned(newIds); }} />}
+      {editingTask && <EditTaskModal task={editingTask} coaches={coaches} onClose={() => setEditingTask(null)} onSuccess={(reassignedId) => { setEditingTask(null); fetchTasks(); if (reassignedId) notifyAssigned([reassignedId]); }} />}
     </div>
   );
 }
@@ -4184,10 +4222,10 @@ function CreateTaskModal({ coaches, userId, onClose, onSuccess }) {
       due_date: dueDate || null,
       status: 'pending',
     }));
-    const { error } = await supabase.from('coach_tasks').insert(rows);
+    const { data: created, error } = await supabase.from('coach_tasks').insert(rows).select('id');
     setSaving(false);
     if (error) alert('Error creating task: ' + formatUserError(error));
-    else onSuccess();
+    else onSuccess((created || []).map(r => r.id));
   };
 
   return (
@@ -4283,7 +4321,8 @@ function EditTaskModal({ task, coaches, onClose, onSuccess }) {
     const { error } = await supabase.from('coach_tasks').update(updates).eq('id', task.id);
     setSaving(false);
     if (error) alert('Error updating task: ' + formatUserError(error));
-    else onSuccess();
+    // #469: a reassigned task is announced to its new coach.
+    else onSuccess(assignedTo !== task.assigned_to && status !== 'completed' ? task.id : null);
   };
 
   return (
