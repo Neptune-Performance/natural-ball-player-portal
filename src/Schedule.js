@@ -811,7 +811,8 @@ export default function Schedule({ userId, userRole, onMessageCoach, initialMode
     // coaches see slots where they are the coach; players see their confirmed reservations.
     const slotEvents = [];
     if (isCoach) {
-      const { data: rawSlots, error: rawSlotsError } = await supabase.from('training_slots').select('*').eq('coach_id', userId);
+      // #470: per-coach rows grow with slot-autoclean tombstones — page (#437).
+      const { rows: rawSlots, error: rawSlotsError } = await readAllPages(() => supabase.from('training_slots').select('*').eq('coach_id', userId).order('id'));
       if (rawSlotsError) console.error('fetchMyScheduleEvents: training_slots query failed:', rawSlotsError);
       const slotExceptionMap = buildSlotExceptionMap(rawSlots);
       (rawSlots || []).forEach(slot => {
@@ -1461,7 +1462,8 @@ export default function Schedule({ userId, userRole, onMessageCoach, initialMode
   };
 
   const fetchCoachSlots = async (coachId) => {
-    const { data: slots, error: slotErr } = await supabase.from('training_slots').select('*').eq('coach_id', coachId);
+    // #470: per-coach rows grow with slot-autoclean tombstones — page (#437).
+    const { rows: slots, error: slotErr } = await readAllPages(() => supabase.from('training_slots').select('*').eq('coach_id', coachId).order('id'));
     if (slotErr) console.error('Error fetching training slots:', slotErr);
     const { expandedSlots, startStr, endStr } = expandSlotsForWeekView(slots, selectedDate);
     setCoachSlots(expandedSlots);
