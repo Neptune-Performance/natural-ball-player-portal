@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from './supabaseClient';
 import {
   Video, Search, AlertTriangle, CheckCircle2, Loader2, Download, X, Ban,
-  ExternalLink, Check, RefreshCw, Info, Undo2, Lock, ShieldAlert,
+  ExternalLink, Check, RefreshCw, Info, Undo2, Lock, ShieldAlert, Library, Link2,
 } from 'lucide-react';
 import { formatUserError } from './errorMessage';
 import { classifyWriteOutcome } from './writeOutcome';
@@ -13,6 +13,7 @@ import {
   NO_MATCH_TIER,
   CLASSIFICATION_LABELS,
 } from './exerciseVideoMatch';
+import { invalidateExerciseVideos } from './exerciseVideos';
 
 /*
  * Issue #170 — "AI Agent To Find Hyperlinks For All Videos".
@@ -41,6 +42,27 @@ import {
  * blank one.
  *
  * Nothing is written until "Apply changes" is pressed and confirmed.
+ *
+ * #472 / #471 (2026-10-29) — links now STICK:
+ *
+ *   - Applying a link also inserts the movement into exercise_videos (one row
+ *     per exact spelling, keyed the way every reader keys it — libraryKey()
+ *     below). Before this, the URL went onto the rows that existed that minute
+ *     and nowhere else, so every program generated the following week came in
+ *     blank and the same movements were back on the list ('goblet squat': 5
+ *     linked rows, 24 empty, never in the library).
+ *   - supabase/migrations/20261029_exercise_video_library_autofill.sql adds a
+ *     training_exercises trigger that fills an empty video_url from the
+ *     library on insert/update, so every generator inherits the link without
+ *     being touched, and backfills what is already there.
+ *   - A name whose exact spelling is already in the library is therefore not
+ *     a gap to re-link. It is pulled out of the report into a separate "fills
+ *     from the library" card (program rows: the trigger; template entries:
+ *     one staged click).
+ *   - #471: the default list is movements that appear in assigned programs.
+ *     Template-only leftovers (Cordell: "1 place, 1 workout entry, 0 program
+ *     rows") are one filter away, not deleted. The "Linked videos" tab lists
+ *     the library newest-first so staff can see what has been linked.
  */
 
 const STAFF_ROLES = new Set(['admin', 'coach']);
@@ -64,6 +86,26 @@ const VISIBLE_STEP = 100;
 // and this screen will not invent one or ship DDL, so the exclusion list lives
 // in localStorage and the UI says so plainly.
 const EXCLUSION_STORAGE_KEY = 'nbp.exerciseVideoGaps.excludedNames.v1';
+
+// The exercise_videos.name_key rule. NOT normalizeExerciseName — that one
+// singularises and expands abbreviations, and is only used to GROUP spellings
+// on this screen. The stored key is the name trimmed and lower-cased; measured
+// on all 1,275 rows on 2026-10-29, and the same rule ExerciseNameInput.js and
+// ptExerciseBank.js use. The SQL twin is public.exercise_video_key() in the
+// 20261029 migration — change both together or the trigger stops matching.
+export const libraryKey = (name) => String(name || '').trim().toLowerCase();
+
+// Staging-map key for the one "fill these from the library" action. Cannot
+// collide with a real row key: normalizeExerciseName never emits underscores.
+const LIBRARY_FILL_KEY = '__library_fill__';
+
+// #471: which movements the to-do list shows. Default = only what athletes
+// actually see in an assigned program.
+const SCOPE_OPTIONS = [
+  { value: 'programs', label: 'In assigned programs' },
+  { value: 'templates_only', label: 'Only in workout templates' },
+  { value: 'all', label: 'Everywhere' },
+];
 
 // ---------------------------------------------------------------------------
 // Local video-URL validation.
@@ -323,6 +365,182 @@ function StatCard({ value, label, detail, tone = 'default' }) {
   );
 }
 
+function ViewTabs({ view, onChange, libraryCount }) {
+  const tab = (value, label, Icon) => (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={view === value}
+      onClick={() => onChange(value)}
+      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+        view === value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
+      }`}
+    >
+      <Icon size={14} /> {label}
+    </button>
+  );
+  return (
+    <div role="tablist" aria-label="Exercise video views" className="inline-flex rounded-lg bg-gray-100 p-1 gap-1">
+      {tab('missing', 'Missing videos', Video)}
+      {tab('linked', `Linked videos (${libraryCount.toLocaleString()})`, Link2)}
+    </div>
+  );
+}
+
+const formatDate = (iso) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? '—'
+    : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+};
+
+// #471: "a filter that allows coaches/admins to see what videos have been
+// updated with [a] hyperlink". The library, most recently changed first.
+//
+// Honest about dates: exercise_videos only has created_at / updated_at, so a
+// row added by a bulk import shows the IMPORT date, not the day a coach first
+// linked that movement. The original 1,275 videos all share one timestamp
+// (2026-08-07), and the #472 backfill stamps its ~930 rows with the migration
+// time. The note below counts the largest same-timestamp batch so nobody reads
+// it as "930 videos were linked today".
+function LinkedVideosView({ library }) {
+  const [search, setSearch] = useState('');
+  const [visible, setVisible] = useState(VISIBLE_STEP);
+
+  const sorted = useMemo(() => {
+    const changedAt = (v) => v.updated_at || v.created_at || '';
+    return library
+      .filter((v) => String(v.video_url || '').trim())
+      .sort((a, b) => changedAt(b).localeCompare(changedAt(a))
+        || String(a.name || '').localeCompare(String(b.name || '')));
+  }, [library]);
+
+  const largestBatch = useMemo(() => {
+    const counts = new Map();
+    sorted.forEach((v) => { if (v.created_at) counts.set(v.created_at, (counts.get(v.created_at) || 0) + 1); });
+    let best = null;
+    counts.forEach((n, at) => { if (!best || n > best.n) best = { n, at }; });
+    return best && best.n > 20 ? best : null;
+  }, [sorted]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter((v) => String(v.name || '').toLowerCase().includes(q)
+      || String(v.video_url || '').toLowerCase().includes(q));
+  }, [sorted, search]);
+
+  useEffect(() => { setVisible(VISIBLE_STEP); }, [search]);
+
+  const shown = filtered.slice(0, visible);
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-white rounded-lg shadow border border-gray-200 p-4 space-y-3">
+        <div className="flex items-start gap-2 text-sm text-gray-700">
+          <Library size={15} className="mt-0.5 shrink-0 text-blue-600" />
+          <div className="space-y-1">
+            <p>
+              Every movement in the video library, most recently added or changed first. A program row
+              with one of these exact names gets its video automatically, so these never show up as
+              missing again. To change or remove a video, use Programming → All videos.
+            </p>
+            {largestBatch && (
+              <p className="text-xs text-gray-500">
+                {plural(largestBatch.n, 'video')} share one timestamp ({formatDate(largestBatch.at)}) because
+                they were added in a single import — that date is when they were imported, not when each
+                movement was first linked.
+              </p>
+            )}
+          </div>
+        </div>
+        <div className="max-w-md">
+          <label htmlFor="evg-linked-search" className="block text-xs font-medium text-gray-700 mb-1">Search name or link</label>
+          <div className="relative">
+            <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+            <input
+              id="evg-linked-search"
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="e.g. goblet, or youtube.com/shorts"
+              className="w-full pl-8 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+        <p className="text-xs text-gray-500">
+          Showing {Math.min(visible, filtered.length).toLocaleString()} of {filtered.length.toLocaleString()}
+          {search.trim() ? ' matching' : ''} linked movement{filtered.length === 1 ? '' : 's'}.
+        </p>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="bg-white rounded-lg shadow border border-gray-200 p-10 text-center">
+          <p className="text-sm text-gray-600">
+            {search.trim() ? `No linked movements match “${search.trim()}”.` : 'The video library is empty.'}
+          </p>
+        </div>
+      ) : (
+        <div className="bg-white rounded-lg shadow border border-gray-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <caption className="sr-only">Video library, most recently linked or updated first.</caption>
+              <thead className="bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
+                <tr>
+                  <th scope="col" className="px-4 py-2 font-medium">Movement</th>
+                  <th scope="col" className="px-4 py-2 font-medium">Video</th>
+                  <th scope="col" className="px-4 py-2 font-medium whitespace-nowrap">Linked / updated</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {shown.map((v) => {
+                  // A minute of slack: an insert that also sets updated_at
+                  // client-side is "linked", not "updated".
+                  const changed = v.updated_at && v.created_at
+                    && new Date(v.updated_at) - new Date(v.created_at) > 60000;
+                  return (
+                    <tr key={v.id || v.name_key} className="align-top">
+                      <td className="px-4 py-2.5 font-medium text-gray-900 break-words max-w-xs">{v.name}</td>
+                      <td className="px-4 py-2.5 max-w-md">
+                        <a
+                          href={v.video_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-start gap-1 text-blue-600 hover:text-blue-800 break-all focus:outline-none focus:ring-2 focus:ring-blue-500 rounded"
+                        >
+                          <ExternalLink size={13} className="mt-0.5 shrink-0" />
+                          <span>{v.video_url}</span>
+                        </a>
+                      </td>
+                      <td className="px-4 py-2.5 whitespace-nowrap text-gray-700">
+                        <p>{formatDate(v.created_at)}</p>
+                        {changed && <p className="text-xs text-gray-500">updated {formatDate(v.updated_at)}</p>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {filtered.length > visible && (
+            <div className="border-t border-gray-100 p-3 text-center">
+              <button
+                type="button"
+                onClick={() => setVisible((n) => n + VISIBLE_STEP)}
+                className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                Show {Math.min(VISIBLE_STEP, filtered.length - visible)} more
+                <span className="text-gray-500"> ({(filtered.length - visible).toLocaleString()} left)</span>
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 
 export default function ExerciseVideoGaps({ userRole }) {
@@ -342,6 +560,9 @@ export default function ExerciseVideoGaps({ userRole }) {
   const [excluded, setExcluded] = useState(() => new Set(initialExclusions.keys));
   const [storageAvailable] = useState(initialExclusions.available);
 
+  // 'missing' = the to-do list; 'linked' = the library, newest first (#471).
+  const [view, setView] = useState('missing');
+  const [scopeFilter, setScopeFilter] = useState('programs');
   const [classificationFilter, setClassificationFilter] = useState('movement');
   const [tierFilter, setTierFilter] = useState('all');
   const [folderFilter, setFolderFilter] = useState('all');
@@ -376,7 +597,7 @@ export default function ExerciseVideoGaps({ userRole }) {
       const [templateRows, exerciseRows, videoRows] = await Promise.all([
         fetchAllRows('workout_templates', 'id, name, folder, exercises, created_by', 'id'),
         fetchAllRows('training_exercises', 'id, name, video_url, day_id', 'id'),
-        fetchAllRows('exercise_videos', 'name, name_key, video_url', 'name_key'),
+        fetchAllRows('exercise_videos', 'id, name, name_key, video_url, created_at, updated_at', 'name_key'),
       ]);
       setTemplates(templateRows);
       setProgramRows(exerciseRows);
@@ -451,6 +672,43 @@ export default function ExerciseVideoGaps({ userRole }) {
     return out;
   }, [templates, programRows, templateOwnership]);
 
+  // --- the library, keyed the way the database keys it ----------------------
+  const libraryByKey = useMemo(() => {
+    const map = new Map();
+    library.forEach((v) => {
+      const url = String(v.video_url || '').trim();
+      if (url && v.name_key) map.set(v.name_key, { ...v, video_url: url });
+    });
+    return map;
+  }, [library]);
+
+  // #472: an unlinked entry whose exact name is already in the library is not
+  // a gap to re-link — the library already knows its video. Those come out of
+  // the report and into their own card. Everything else is a real gap.
+  const { openGaps, libraryFill } = useMemo(() => {
+    const open = [];
+    const fill = {
+      gaps: [],
+      names: new Map(), // libraryKey -> { name, url, count }
+      templateWritable: 0,
+      templateBlocked: 0,
+      programEntries: 0,
+    };
+    gaps.forEach((g) => {
+      const hit = libraryByKey.get(libraryKey(g.name));
+      if (!hit) { open.push(g); return; }
+      fill.gaps.push(g);
+      const k = libraryKey(g.name);
+      const prev = fill.names.get(k);
+      if (prev) prev.count += 1;
+      else fill.names.set(k, { name: hit.name || g.name, url: hit.video_url, count: 1 });
+      if (g.source !== 'template') fill.programEntries += 1;
+      else if (g.ownership === OWNERSHIP.OTHER || g.ownership === OWNERSHIP.ORPHAN) fill.templateBlocked += 1;
+      else fill.templateWritable += 1;
+    });
+    return { openGaps: open, libraryFill: fill };
+  }, [gaps, libraryByKey]);
+
   // --- compute the report --------------------------------------------------
   // Yielded through a timeout so React paints the "Matching…" state first: the
   // full run is a few hundred milliseconds on a mid-range laptop, which is long
@@ -460,13 +718,13 @@ export default function ExerciseVideoGaps({ userRole }) {
     setComputing(true);
     let cancelled = false;
     const handle = setTimeout(() => {
-      const built = buildGapReport(gaps, library, { excludedKeys: excluded, limit: 3 });
+      const built = buildGapReport(openGaps, library, { excludedKeys: excluded, limit: 3 });
       if (cancelled) return;
       setReport(built);
       setComputing(false);
     }, 0);
     return () => { cancelled = true; clearTimeout(handle); };
-  }, [gaps, library, excluded, loading, loadError, isStaff]);
+  }, [openGaps, library, excluded, loading, loadError, isStaff]);
 
   // Stable identity when there is no report yet, so the memos below don't
   // recompute on every render against a fresh [].
@@ -491,7 +749,7 @@ export default function ExerciseVideoGaps({ userRole }) {
     const staffTemplates = new Set();
     const otherTemplates = new Set();
     const orphanTemplates = new Set();
-    gaps.forEach((g) => {
+    openGaps.forEach((g) => {
       if (g.source !== 'template') { programEntries += 1; return; }
       if (g.ownership === OWNERSHIP.OTHER) { otherEntries += 1; otherTemplates.add(g.templateId); }
       else if (g.ownership === OWNERSHIP.ORPHAN) { orphanEntries += 1; orphanTemplates.add(g.templateId); }
@@ -522,7 +780,7 @@ export default function ExerciseVideoGaps({ userRole }) {
       noTemplateAccess: attemptableEntries === 0 && (otherEntries + orphanEntries) > 0,
       ownerUnknown: !currentUserId,
     };
-  }, [gaps, currentUserId]);
+  }, [openGaps, currentUserId]);
 
   // Per gap-row: how many of its occurrences this user can actually write.
   const rowWritability = useMemo(() => {
@@ -553,6 +811,8 @@ export default function ExerciseVideoGaps({ userRole }) {
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase();
     return rows.filter((row) => {
+      if (scopeFilter === 'programs' && row.programCount === 0) return false;
+      if (scopeFilter === 'templates_only' && row.programCount > 0) return false;
       if (classificationFilter === 'movement' && !row.isMovement) return false;
       if (classificationFilter === 'non_movement' && row.isMovement) return false;
       if (classificationFilter !== 'all'
@@ -564,10 +824,17 @@ export default function ExerciseVideoGaps({ userRole }) {
       if (q && !row.displayName.toLowerCase().includes(q) && !row.normalized.includes(q)) return false;
       return true;
     });
-  }, [rows, classificationFilter, tierFilter, folderFilter, search]);
+  }, [rows, scopeFilter, classificationFilter, tierFilter, folderFilter, search]);
+
+  // How many rows the scope filter alone is hiding, so the count line can say
+  // so instead of the list just looking shorter.
+  const scopeHiddenCount = useMemo(() => {
+    if (scopeFilter === 'all') return 0;
+    return rows.filter((row) => (scopeFilter === 'programs' ? row.programCount === 0 : row.programCount > 0)).length;
+  }, [rows, scopeFilter]);
 
   useEffect(() => { setVisibleCount(VISIBLE_STEP); },
-    [classificationFilter, tierFilter, folderFilter, search]);
+    [scopeFilter, classificationFilter, tierFilter, folderFilter, search]);
 
   // --- staging -------------------------------------------------------------
   const stageLink = useCallback((row, url, matchName) => {
@@ -611,6 +878,28 @@ export default function ExerciseVideoGaps({ userRole }) {
     }));
   }, []);
 
+  // #472: one staged action for every unlinked entry whose exact name is
+  // already in the library. Each entry gets ITS OWN library video at apply
+  // time — this is not one URL for everything.
+  const stageLibraryFill = useCallback(() => {
+    const writable = libraryFill.templateWritable + libraryFill.programEntries;
+    setStaged((prev) => ({
+      ...prev,
+      [LIBRARY_FILL_KEY]: {
+        action: 'library_fill',
+        displayName: `${plural(libraryFill.names.size, 'movement')} already in the video library`,
+        matchName: 'each one\'s library video',
+        occurrences: libraryFill.gaps.length,
+        templateCount: libraryFill.templateWritable + libraryFill.templateBlocked,
+        programCount: libraryFill.programEntries,
+        writableEntries: writable,
+        blockedEntries: libraryFill.templateBlocked,
+        writableTemplateEntries: libraryFill.templateWritable,
+        programEntries: libraryFill.programEntries,
+      },
+    }));
+  }, [libraryFill]);
+
   const unstage = useCallback((key) => {
     setStaged((prev) => { const next = { ...prev }; delete next[key]; return next; });
   }, []);
@@ -625,7 +914,9 @@ export default function ExerciseVideoGaps({ userRole }) {
     let excludeNames = 0;
     let excludeEntries = 0;
     entries.forEach(([, item]) => {
-      if (item.action === 'link') {
+      if (item.action === 'link' || item.action === 'library_fill') {
+        // A library fill is counted as one "name" here — the bar and the
+        // confirm list it as one line, and its entry counts are exact.
         linkNames += 1;
         templateEntries += item.writableTemplateEntries || 0;
         programEntries += item.programEntries || 0;
@@ -651,6 +942,20 @@ export default function ExerciseVideoGaps({ userRole }) {
     };
   }, [staged]);
 
+  // How many library rows Apply would add — the same rule applyChanges uses,
+  // so the confirm dialog's number is the number that will be attempted.
+  const stagedLibraryAddCount = useMemo(() => {
+    const linkKeys = new Set(Object.entries(staged).filter(([, x]) => x.action === 'link').map(([k]) => k));
+    if (linkKeys.size === 0) return 0;
+    const keys = new Set();
+    gaps.forEach((gap) => {
+      const k = libraryKey(gap.name);
+      if (!k || libraryByKey.has(k)) return;
+      if (linkKeys.has(normalizeExerciseName(gap.name))) keys.add(k);
+    });
+    return keys.size;
+  }, [staged, gaps, libraryByKey]);
+
   // --- apply (the only mutating code in this file) -------------------------
   const applyChanges = useCallback(async () => {
     setApplying(true);
@@ -660,6 +965,32 @@ export default function ExerciseVideoGaps({ userRole }) {
     const linkStagings = Object.entries(staged).filter(([, s]) => s.action === 'link');
     const excludeKeys = Object.entries(staged).filter(([, s]) => s.action === 'exclude').map(([k]) => k);
     const urlByKey = new Map(linkStagings.map(([k, s]) => [k, s.url]));
+    const fillFromLibrary = Boolean(staged[LIBRARY_FILL_KEY]);
+
+    // The ONE rule for which URL an entry gets (#472): a name already in the
+    // library always gets the library's video, and only when the library fill
+    // was staged — a staged link for its fuzzy group never overrides it, or the
+    // template and the library would disagree about the same name. Every other
+    // name gets the link staged for its group.
+    const urlFor = (name) => {
+      const lib = libraryByKey.get(libraryKey(name));
+      if (lib) return fillFromLibrary ? lib.video_url : null;
+      return urlByKey.get(normalizeExerciseName(name || '')) || null;
+    };
+
+    // #472: what goes INTO the library. One row per exact spelling that is not
+    // in it yet — the trigger matches on the exact key, so 'Goblet Squats' and
+    // 'goblet squat' each need their own row. Includes spellings that only live
+    // in templates this account cannot write: the library row is independent of
+    // template ownership.
+    const libraryAdds = new Map(); // libraryKey -> { name, name_key, video_url }
+    gaps.forEach((gap) => {
+      const k = libraryKey(gap.name);
+      if (!k || libraryByKey.has(k) || libraryAdds.has(k)) return;
+      const url = urlByKey.get(normalizeExerciseName(gap.name));
+      if (!url) return;
+      libraryAdds.set(k, { name: String(gap.name).trim(), name_key: k, video_url: url });
+    });
 
     // Which template rows and which program rows could possibly be touched —
     // and which of them the owner-only UPDATE policy will refuse outright.
@@ -677,8 +1008,7 @@ export default function ExerciseVideoGaps({ userRole }) {
     let templateEntriesBlockedOther = 0;
     let templateEntriesBlockedOrphan = 0;
     gaps.forEach((gap) => {
-      const key = normalizeExerciseName(gap.name);
-      if (!urlByKey.has(key)) return;
+      if (!urlFor(gap.name)) return;
       if (gap.source !== 'template') { candidateProgramIds.push(gap.exerciseId); return; }
       if (gap.ownership === OWNERSHIP.OTHER) {
         templateEntriesBlockedOther += 1;
@@ -703,13 +1033,62 @@ export default function ExerciseVideoGaps({ userRole }) {
     let templateEntriesBlockedStaffPolicy = 0;
     let programRowsWritten = 0;
     let programRowsBlocked = 0;
+    let libraryAdded = 0;
+    let libraryBlocked = 0;
+    // Spellings someone else put in the library between load and now. Left
+    // exactly as they are — this screen never changes an existing library
+    // video (that is Programming → All videos' job, which also re-points every
+    // row using the old link).
+    const libraryAlreadyThere = [];
 
-    const totalSteps = templateIds.length + Math.ceil(candidateProgramIds.length / WRITE_BATCH_SIZE) + 1;
+    const libraryRows = Array.from(libraryAdds.values());
+    const totalSteps = Math.ceil(libraryRows.length / WRITE_BATCH_SIZE)
+      + templateIds.length + Math.ceil(candidateProgramIds.length / WRITE_BATCH_SIZE) + 1;
     let done = 0;
     setProgress({ done: 0, total: totalSteps });
     const tick = () => { done += 1; setProgress({ done, total: totalSteps }); };
 
     try {
+      // --- exercise_videos: FIRST, so the link sticks even if a later step
+      // fails. This is the #472 fix: next week's generated program rows get
+      // the video from the database trigger, not from this screen. -----------
+      for (let i = 0; i < libraryRows.length; i += WRITE_BATCH_SIZE) {
+        const batch = libraryRows.slice(i, i + WRITE_BATCH_SIZE);
+        const { data: present, error: readErr } = await supabase
+          .from('exercise_videos')
+          .select('name_key, video_url')
+          .in('name_key', batch.map((r) => r.name_key));
+        if (readErr) {
+          console.error('Re-reading the video library failed:', readErr);
+          failures.push({ what: `${plural(batch.length, 'library video')}`, message: formatUserError(readErr) });
+          tick();
+          continue;
+        }
+        const presentKeys = new Set((present || []).map((r) => r.name_key));
+        batch.forEach((r) => { if (presentKeys.has(r.name_key)) libraryAlreadyThere.push(r.name); });
+        const toInsert = batch.filter((r) => !presentKeys.has(r.name_key));
+        if (toInsert.length > 0) {
+          // ignoreDuplicates: a row someone adds in the gap between the read
+          // above and this insert is kept, not overwritten — and it simply does
+          // not come back in `data`, so it is counted as not added.
+          const now = new Date().toISOString();
+          const { data: inserted, error: insErr } = await supabase
+            .from('exercise_videos')
+            .upsert(toInsert.map((r) => ({ ...r, updated_at: now })), { onConflict: 'name_key', ignoreDuplicates: true })
+            .select('name_key');
+          const outcome = classifyWriteOutcome({ error: insErr, data: inserted, expected: toInsert.length });
+          if (outcome.outcome === 'errored') {
+            console.error('Adding to the video library failed:', insErr);
+            failures.push({ what: `${plural(toInsert.length, 'library video')}`, message: formatUserError(insErr) });
+          } else {
+            libraryAdded += outcome.written;
+            libraryBlocked += outcome.blocked;
+          }
+        }
+        tick();
+      }
+      if (libraryAdded > 0) invalidateExerciseVideos();
+
       // --- workout_templates: read-modify-write each JSONB array -----------
       // Re-read immediately before writing rather than trusting the copy loaded
       // when the screen opened — a coach may have edited a template in the
@@ -740,7 +1119,7 @@ export default function ExerciseVideoGaps({ userRole }) {
             // Idempotent and non-destructive: an entry that already has a link
             // is left exactly as it is, so re-running writes nothing.
             if (String(item.link || '').trim()) return item;
-            const url = urlByKey.get(normalizeExerciseName(item.name || ''));
+            const url = urlFor(item.name || '');
             if (!url) return item;
             changed += 1;
             return { ...item, link: url };
@@ -791,7 +1170,7 @@ export default function ExerciseVideoGaps({ userRole }) {
         const byUrl = new Map();
         (fresh || []).forEach((row) => {
           if (String(row.video_url || '').trim()) return; // never overwrite
-          const url = urlByKey.get(normalizeExerciseName(row.name || ''));
+          const url = urlFor(row.name || '');
           if (!url) return;
           const bucket = byUrl.get(url);
           if (bucket) bucket.push(row.id);
@@ -846,7 +1225,11 @@ export default function ExerciseVideoGaps({ userRole }) {
       setApplyResult({
         // "ok" means everything staged actually landed. A blocked write is not
         // an error, but it is emphatically not a success either.
-        ok: failures.length === 0 && templateEntriesBlocked === 0 && programRowsBlocked === 0,
+        ok: failures.length === 0 && templateEntriesBlocked === 0 && programRowsBlocked === 0
+          && libraryBlocked === 0,
+        libraryAdded,
+        libraryBlocked,
+        libraryAlreadyThere,
         templatesUpdated,
         templateEntriesWritten,
         templateEntriesBlockedOther,
@@ -877,6 +1260,9 @@ export default function ExerciseVideoGaps({ userRole }) {
           blockedOtherTemplates.size + blockedOrphanTemplates.size + blockedUnexpectedTemplates.size,
         programRowsWritten,
         programRowsBlocked,
+        libraryAdded,
+        libraryBlocked,
+        libraryAlreadyThere,
         excludedNames: 0,
         exclusionsSaved: true,
         failures: [...failures, { what: 'the run', message: formatUserError(e) }],
@@ -885,7 +1271,7 @@ export default function ExerciseVideoGaps({ userRole }) {
       setApplying(false);
       setProgress({ done: 0, total: 0 });
     }
-  }, [staged, gaps, excluded, load]);
+  }, [staged, gaps, excluded, load, libraryByKey]);
 
   const restoreExclusions = useCallback(() => {
     writeExclusions([]);
@@ -977,6 +1363,25 @@ export default function ExerciseVideoGaps({ userRole }) {
     );
   }
 
+  // The library view needs no matching run, so it never waits on one.
+  if (view === 'linked') {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <ViewTabs view={view} onChange={setView} libraryCount={libraryByKey.size} />
+          <button
+            type="button"
+            onClick={load}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <RefreshCw size={14} /> Reload
+          </button>
+        </div>
+        <LinkedVideosView library={library} />
+      </div>
+    );
+  }
+
   if (computing || !summary) {
     return (
       <div className="text-center py-12 text-gray-500 flex items-center justify-center gap-2" role="status">
@@ -991,6 +1396,8 @@ export default function ExerciseVideoGaps({ userRole }) {
 
   return (
     <div className="space-y-6 pb-28">
+      <ViewTabs view={view} onChange={setView} libraryCount={libraryByKey.size} />
+
       {/* ---------------- headline ---------------- */}
       <div className="bg-white rounded-lg shadow border border-gray-200 p-5">
         <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -1000,7 +1407,8 @@ export default function ExerciseVideoGaps({ userRole }) {
               <h2 className="text-lg font-semibold text-gray-900">Missing exercise videos</h2>
               <p className="text-sm text-gray-600 mt-1 max-w-3xl">
                 Every workout entry and assigned-program row with no video link, grouped by movement
-                and matched against the {summary.librarySize.toLocaleString()}-video library.
+                and matched against the {summary.librarySize.toLocaleString()}-video library. Names
+                already in the library are not listed — they fill from it (see below).
               </p>
             </div>
           </div>
@@ -1051,9 +1459,10 @@ export default function ExerciseVideoGaps({ userRole }) {
           <Info size={15} className="mt-0.5 shrink-0" />
           <div className="space-y-1">
             <p>
-              <span className="font-semibold">The honest version of #170:</span> the video library was
-              built from entries that already had a link, so an exact-name backfill matches nothing at
-              all. Of {summary.distinctNames.toLocaleString()} unlinked names, the library can cover{' '}
+              <span className="font-semibold">Links stick now (#472):</span> applying a link here also
+              saves the movement to the video library, and the database gives that video to every new
+              program row with the same name — so a movement only has to be linked once. Of the{' '}
+              {summary.distinctNames.toLocaleString()} unlinked names left, the library can cover{' '}
               <strong>{summary.coverableHighNames.toLocaleString()}</strong> confidently and{' '}
               <strong>{coveragePossible.toLocaleString()}</strong> at best with review. The remaining{' '}
               <strong>{summary.needsNewVideoNames.toLocaleString()}</strong> movements need a video
@@ -1142,6 +1551,70 @@ export default function ExerciseVideoGaps({ userRole }) {
         )}
       </div>
 
+      {/* ---------------- already in the library (#472) ----------------
+          Not gaps to re-link: the library already has a video for each exact
+          name. Program rows should never land here once the 20261029 trigger is
+          live — if they do, the card says so rather than quietly listing them. */}
+      {libraryFill.gaps.length > 0 && (
+        <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-900 flex items-start gap-2">
+          <Library size={15} className="mt-0.5 shrink-0" />
+          <div className="space-y-1 min-w-0">
+            <p>
+              <span className="font-medium">
+                {plural(libraryFill.gaps.length, 'unlinked entry', 'unlinked entries')} across{' '}
+                {plural(libraryFill.names.size, 'movement')} already {libraryFill.names.size === 1 ? 'has' : 'have'} a
+                video in the library
+              </span>{' '}
+              ({libraryFill.templateWritable + libraryFill.templateBlocked} in workout templates,{' '}
+              {libraryFill.programEntries} in assigned programs). They are left off the list below — they
+              fill from the library, each with its own video.
+            </p>
+            {libraryFill.programEntries > 0 && (
+              <p className="text-amber-800">
+                {plural(libraryFill.programEntries, 'assigned-program row')} should already have been filled by
+                the database. If this number does not drop, the 20261029 exercise-video migration has probably
+                not been applied yet; filling them here works either way.
+              </p>
+            )}
+            {libraryFill.templateBlocked > 0 && (
+              <p className="text-amber-800">
+                {plural(libraryFill.templateBlocked, 'template entry', 'template entries')} sit in templates this
+                account cannot write and will be skipped.
+              </p>
+            )}
+            <details className="text-xs">
+              <summary className="cursor-pointer text-green-800 underline">Show the movements</summary>
+              <ul className="mt-1 space-y-0.5 max-h-40 overflow-y-auto">
+                {Array.from(libraryFill.names.values()).slice(0, 200).map((n) => (
+                  <li key={n.name} className="break-words">
+                    {n.name} ({n.count}) —{' '}
+                    <a href={n.url} target="_blank" rel="noopener noreferrer" className="underline break-all">{n.url}</a>
+                  </li>
+                ))}
+              </ul>
+            </details>
+            {staged[LIBRARY_FILL_KEY] ? (
+              <button
+                type="button"
+                onClick={() => unstage(LIBRARY_FILL_KEY)}
+                className="inline-flex items-center gap-1 text-xs text-green-900 underline focus:outline-none focus:ring-2 focus:ring-green-500 rounded"
+              >
+                <X size={12} /> Staged — unstage
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={stageLibraryFill}
+                disabled={libraryFill.templateWritable + libraryFill.programEntries === 0}
+                className="inline-flex items-center gap-1 rounded border border-green-300 bg-white px-2 py-1 text-xs font-medium text-green-800 hover:bg-green-100 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-green-500"
+              >
+                <Check size={12} /> Stage: fill these from the library
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ---------------- exclusions note ---------------- */}
       <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex items-start gap-2">
         <AlertTriangle size={15} className="mt-0.5 shrink-0" />
@@ -1182,7 +1655,8 @@ export default function ExerciseVideoGaps({ userRole }) {
             {applyResult.ok ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
             {applyResult.ok
               ? 'Changes applied.'
-              : (applyResult.templateEntriesWritten + applyResult.programRowsWritten === 0
+              : (applyResult.templateEntriesWritten + applyResult.programRowsWritten
+                + (applyResult.libraryAdded || 0) === 0
                 ? 'Nothing was saved.'
                 : applyResult.failures.length > 0
                   ? 'Applied with failures.'
@@ -1195,6 +1669,20 @@ export default function ExerciseVideoGaps({ userRole }) {
           <ul className="space-y-0.5 list-disc list-inside">
             <li>{plural(applyResult.templateEntriesWritten, 'workout entry')} linked across {plural(applyResult.templatesUpdated, 'template')}.</li>
             <li>{plural(applyResult.programRowsWritten, 'assigned-program row')} linked.</li>
+            <li>
+              {plural(applyResult.libraryAdded || 0, 'movement')} added to the video library
+              {(applyResult.libraryAdded || 0) > 0
+                ? ' — programs generated from now on pick these videos up automatically.'
+                : '.'}
+            </li>
+            {(applyResult.libraryAlreadyThere || []).length > 0 && (
+              <li>
+                {plural(applyResult.libraryAlreadyThere.length, 'spelling')} had been added to the library
+                by someone else since this screen loaded, so the library kept its existing video
+                ({applyResult.libraryAlreadyThere.slice(0, 5).join(', ')}
+                {applyResult.libraryAlreadyThere.length > 5 ? ', …' : ''}). Change it on All videos if it is wrong.
+              </li>
+            )}
             {applyResult.excludedNames > 0 && (
               <li>
                 {plural(applyResult.excludedNames, 'name')} marked “not a movement”
@@ -1203,7 +1691,8 @@ export default function ExerciseVideoGaps({ userRole }) {
             )}
           </ul>
 
-          {(applyResult.templateEntriesBlocked > 0 || applyResult.programRowsBlocked > 0) && (
+          {(applyResult.templateEntriesBlocked > 0 || applyResult.programRowsBlocked > 0
+            || (applyResult.libraryBlocked || 0) > 0) && (
             <div className="mt-2">
               <p className="font-medium flex items-center gap-1.5">
                 <Lock size={14} /> Blocked by permissions — not saved, and not an error
@@ -1239,6 +1728,13 @@ export default function ExerciseVideoGaps({ userRole }) {
                     update and were not saved.
                   </li>
                 )}
+                {(applyResult.libraryBlocked || 0) > 0 && (
+                  <li>
+                    {plural(applyResult.libraryBlocked, 'library video')} did not come back from the insert —
+                    either someone added the same name a moment earlier, or the database refused it. Not
+                    counted as added; the next generated program will not pick these up until they are.
+                  </li>
+                )}
               </ul>
               <p className="mt-1 text-xs">{RLS_PLAIN_SENTENCE}</p>
             </div>
@@ -1266,7 +1762,18 @@ export default function ExerciseVideoGaps({ userRole }) {
 
       {/* ---------------- filters ---------------- */}
       <div className="bg-white rounded-lg shadow border border-gray-200 p-4">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <div>
+            <label htmlFor="evg-scope" className="block text-xs font-medium text-gray-700 mb-1">Appears in</label>
+            <select
+              id="evg-scope"
+              value={scopeFilter}
+              onChange={(e) => setScopeFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {SCOPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
           <div>
             <label htmlFor="evg-search" className="block text-xs font-medium text-gray-700 mb-1">Search names</label>
             <div className="relative">
@@ -1319,6 +1826,10 @@ export default function ExerciseVideoGaps({ userRole }) {
         <p className="mt-3 text-xs text-gray-500">
           Showing {Math.min(visibleCount, filteredRows.length).toLocaleString()} of{' '}
           {filteredRows.length.toLocaleString()} matching names ({summary.distinctNames.toLocaleString()} in total).
+          {scopeFilter === 'programs' && scopeHiddenCount > 0
+            && ` ${plural(scopeHiddenCount, 'name')} that only appear in workout templates (no assigned program) are hidden — switch “Appears in” to see them.`}
+          {scopeFilter === 'templates_only' && scopeHiddenCount > 0
+            && ` ${plural(scopeHiddenCount, 'name')} used in assigned programs are hidden.`}
           {classificationFilter === 'movement' && ' Prescriptions are hidden — switch the classification filter to check them.'}
         </p>
       </div>
@@ -1560,8 +2071,8 @@ export default function ExerciseVideoGaps({ userRole }) {
               <button
                 type="button"
                 onClick={() => setConfirmOpen(true)}
-                disabled={applying || (stagedStats.linkEntries === 0 && stagedStats.excludeNames === 0)}
-                title={stagedStats.linkEntries === 0 && stagedStats.excludeNames === 0
+                disabled={applying || (stagedStats.linkEntries === 0 && stagedStats.excludeNames === 0 && stagedLibraryAddCount === 0)}
+                title={stagedStats.linkEntries === 0 && stagedStats.excludeNames === 0 && stagedLibraryAddCount === 0
                   ? 'Nothing staged here can be written from this account.'
                   : undefined}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
@@ -1624,6 +2135,11 @@ export default function ExerciseVideoGaps({ userRole }) {
                   <strong>{stagedStats.programEntries.toLocaleString()}</strong> assigned-program row
                   {stagedStats.programEntries === 1 ? '' : 's'} will get a video_url.
                 </li>
+                <li>
+                  <strong>{stagedLibraryAddCount.toLocaleString()}</strong> movement spelling
+                  {stagedLibraryAddCount === 1 ? '' : 's'} will be added to the video library, so programs
+                  generated later get the video automatically. Existing library videos are never changed.
+                </li>
                 {stagedStats.blockedEntries > 0 && (
                   <li className="text-red-700">
                     <strong>{stagedStats.blockedEntries.toLocaleString()}</strong> further entr
@@ -1652,7 +2168,7 @@ export default function ExerciseVideoGaps({ userRole }) {
                   {Object.entries(staged).map(([key, s]) => (
                     <li key={key} className="break-words">
                       <span className="font-medium">{s.displayName}</span>{' '}
-                      {s.action === 'link'
+                      {s.action === 'link' || s.action === 'library_fill'
                         ? `→ ${s.matchName} (${s.occurrences} place${s.occurrences === 1 ? '' : 's'})`
                         : '→ hidden as not a movement'}
                     </li>
