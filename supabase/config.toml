@@ -63,6 +63,7 @@ verify_jwt = false
 # Everything else (whoop, create-user, delete-user, update-user-email,
 # send-email, send-campaign, reset-user-password, square-checkout,
 # square-catalog-sync, square-apply-discount, square-subscriptions-backfill,
-# square-backfill-resolve, public-booking-refund, generate-report, fetch-rss)
+# square-backfill-resolve, public-booking-refund, generate-report, fetch-rss,
+# weekly-reminders, coach-task-notify)
 # intentionally keeps the verify_jwt=true default — they are called from the
 # authenticated app and do their own role checks on top.

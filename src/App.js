@@ -62,12 +62,14 @@ export default function App() {
     try {
       const p = new URLSearchParams(window.location.search);
       const v = p.get('view');
-      if (v === 'stats' || v === 'messages') {
+      // #469: the coach task emails link ?view=tasks → Coach Tools → My Tasks.
+      if (v === 'stats' || v === 'messages' || v === 'tasks') {
         if (v === 'stats') { try { sessionStorage.setItem('nbp_deeplink_tab', 'stats'); } catch {} }
+        if (v === 'tasks') { try { sessionStorage.setItem('nbp_coachtools_tab', 'tasks'); } catch {} }
         p.delete('view');
         const qs = p.toString();
         window.history.replaceState({}, '', `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash || ''}`);
-        return v === 'stats' ? 'profile' : 'messages';
+        return v === 'stats' ? 'profile' : v === 'tasks' ? 'coach-tools' : 'messages';
       }
     } catch {}
     try { return localStorage.getItem('nbp_current_view') || ''; } catch { return ''; }
