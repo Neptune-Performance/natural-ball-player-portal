@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from './supabaseClient';
 import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, Plus, X, Edit2, Trash2, MapPin, Building, UserCheck, Repeat, CheckSquare, Copy, Globe, Lock, Users as UsersIcon } from 'lucide-react';
+import { readAllPages } from './readAllPages';
 import { fmtLocalDate, generateOccurrenceDates, expandRecurringEvents, buildSlotExceptionMap, getSlotDateException, collectMovedSlots } from './scheduleUtils';
 import CalendarContextMenu from './CalendarContextMenu';
 import RecurrenceDecisionModal from './RecurrenceDecisionModal';
@@ -1303,7 +1304,9 @@ function CoachAvailabilityWeek({ weekStart, isAdmin }) {
     const endStr = fmtLocalDate(wkEnd);
 
     const [slotRes, coachRes, resvRes] = await Promise.all([
-      supabase.from('training_slots').select('*'),
+      // #470: slot-autoclean adds ~15 tombstone rows a day; page past the
+      // 1,000-row PostgREST cap (#437).
+      readAllPages(() => supabase.from('training_slots').select('*').order('id')).then(({ rows, error }) => ({ data: rows, error })),
       supabase.from('users').select('id, full_name, avatar_url').in('role', ['admin', 'coach']).order('full_name'),
       supabase.from('slot_reservations').select('id, slot_id, slot_date, status').gte('slot_date', startStr).lte('slot_date', endStr).neq('status', 'cancelled'),
     ]);

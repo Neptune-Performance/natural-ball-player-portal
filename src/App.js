@@ -2056,10 +2056,12 @@ function AdminDashboard({ userId, userRole, setCurrentView }) {
     const today = fmtLocalDate(new Date());
     const todayDow = new Date().getDay();
 
-    const { data: slots, error: slotsError } = await supabase
+    // #470: per-coach rows grow with slot-autoclean tombstones — page (#437).
+    const { rows: slots, error: slotsError } = await readAllPages(() => supabase
       .from('training_slots')
       .select('*')
-      .eq('coach_id', userId);
+      .eq('coach_id', userId)
+      .order('id'));
     if (slotsError) console.error('fetchTrainingSessions: training_slots query failed:', slotsError);
 
     if (!slots || slots.length === 0) { setLoadingSlots(false); return; }

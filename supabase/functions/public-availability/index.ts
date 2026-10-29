@@ -57,13 +57,27 @@ Deno.serve(async (req) => {
         .from("facility_events")
         .select("id, title, event_date, start_time, end_time, location, lanes, color, booking_type, is_recurring, recurrence_rule, recurrence_parent_id, is_exception, original_date, is_public, public_price_cents, public_capacity")
         .or("is_public.eq.true,recurrence_parent_id.not.is.null"),
-      service
-        .from("training_slots")
-        // Child exception rows (#279 tombstones, #292 moves) are fetched too —
-        // they are not themselves is_public masters, so the same .or() the
-        // facility_events query uses is needed to see them at all.
-        .select("id, coach_id, slot_date, start_time, duration_minutes, repeat_weekly, repeat_end_date, max_players, notes, is_public, public_price_cents, recurrence_parent_id, is_exception, original_date")
-        .or("is_public.eq.true,recurrence_parent_id.not.is.null"),
+      // #470: paged — slot-autoclean adds ~15 tombstone children a day, and
+      // PostgREST silently clamps one response at 1,000 rows (#437).
+      (async () => {
+        const PAGE = 1000;
+        const rows: any[] = [];
+        for (let from = 0; ; from += PAGE) {
+          const { data, error } = await service
+            .from("training_slots")
+            // Child exception rows (#279 tombstones, #292 moves) are fetched too —
+            // they are not themselves is_public masters, so the same .or() the
+            // facility_events query uses is needed to see them at all.
+            .select("id, coach_id, slot_date, start_time, duration_minutes, repeat_weekly, repeat_end_date, max_players, notes, is_public, public_price_cents, recurrence_parent_id, is_exception, original_date")
+            .or("is_public.eq.true,recurrence_parent_id.not.is.null")
+            .order("id")
+            .range(from, from + PAGE - 1);
+          if (error) return { data: null, error };
+          rows.push(...(data || []));
+          if (!data || data.length < PAGE) break;
+        }
+        return { data: rows, error: null };
+      })(),
       service
         .from("public_bookings")
         .select("source_type, source_id, occurrence_date")

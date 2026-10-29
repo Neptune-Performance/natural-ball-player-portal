@@ -3020,11 +3020,13 @@ function TrainingSlotsTab({ userId }) {
 
   const fetchSlots = async () => {
     setLoading(true);
-    const { data: slotData, error } = await supabase
+    // #470: per-coach rows grow with slot-autoclean tombstones — page (#437).
+    const { rows: slotData, error } = await readAllPages(() => supabase
       .from('training_slots')
       .select('*')
       .eq('coach_id', userId)
-      .order('slot_date', { ascending: true });
+      .order('slot_date', { ascending: true })
+      .order('id'));
     if (error) { console.error(error); setLoading(false); return; }
 
     // Expand recurring slots into individual occurrence dates within a 90-day window
