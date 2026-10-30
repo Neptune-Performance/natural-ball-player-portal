@@ -13,7 +13,7 @@
 - GitHub repo: `Neptune-Performance/natural-ball-player-portal` (transferred from `IamTrevorMay/natural-ball-player` by 2026-10-09; old URL redirects, repoId `1153932051`)
 - Vercel team: `team_rqOUvfWKVJT8gPTJpLfUMzlx` (mayday-media). TWO projects build this repo:
   - **`natural-ball-player` `prj_MMPAWu9W12V5ljZCNn1ONbrKLvKr` = REAL PRODUCTION**: `www.thenatural-app.com`, `natural-ball-player.vercel.app`; holds `SUPABASE_SERVICE_ROLE_KEY`, `CRON_SECRET`, `TRACKMAN_FTP_*`, so the Vercel crons (trackman-sync, weekly-reminders, whoop-sync) only work here. The local `vercel` CLI is linked to it
-  - `nbp-portal` `prj_esGXWgj1jyLoC45LO4jAwX7u7jW8`: `nbp-portal.vercel.app` only, NO secrets (its `/api/*` crons 500 with "SUPABASE_SERVICE_ROLE_KEY not configured")
+  - `nbp-portal` `prj_esGXWgj1jyLoC45LO4jAwX7u7jW8`: `nbp-portal.vercel.app` only, NO secrets (its `/api/*` crons 500 with "SUPABASE_SERVICE_ROLE_KEY not configured"). **Retired 2026-10-30:** a host-conditional 308 in `vercel.json` forwards `nbp-portal.vercel.app` → `www.thenatural-app.com` (Vercel's domain redirect refuses a target outside the project). Staff had kept using it and saw a stale Oct 9 build. Supabase Auth Site URL = `https://www.thenatural-app.com`, Redirect URLs include `https://www.thenatural-app.com/**` (set 2026-10-30). Only `natural-ball-player` needs deploying
 - **Auto-deploy is broken since the repo transfer (2026-10-09):** both projects' git links still name the old owner and the push of `d6dcb20d` triggered nothing. Until the projects are re-linked (Vercel → Settings → Git) or the Vercel GitHub App is installed on Neptune-Performance, trigger a deploy by hand: `vercel api "/v13/deployments?teamId=team_rqOUvfWKVJT8gPTJpLfUMzlx" --method POST --input deploy.json` with `{"name":"natural-ball-player","project":"prj_MMPAWu9W12V5ljZCNn1ONbrKLvKr","target":"production","gitSource":{"type":"github","repoId":1153932051,"ref":"main"}}`, then poll `/v13/deployments/<id>`. The Vercel MCP token is NOT authorized for this team; use `vercel api`
 
 ## User Roles
@@ -27,8 +27,7 @@ When creating new tables:
 4. **PostgREST clamps every query at 1,000 rows with NO error (#437).** `users` passed 1,000 on 2026-10-05 (1,029), so any "list all users / all players" read ordered by `full_name` silently lost the tail of the alphabet (Zach Robman, #1024, vanished from the Schedule picker). Any query that can return more than a few hundred rows MUST go through `readAllPages(() => builder)` in `src/readAllPages.js` and order by `id` as a tiebreaker. A single wide `.range(0, 9999)` is clamped the same way. All 15 list-style user queries were converted on 2026-10-05.
 
 ## Pending Manual Configuration
-1. **Supabase Auth Redirect URLs (for forgot password #78, #139):** Go to Supabase Dashboard → Project Settings → Authentication → URL Configuration. Set **Site URL** to `https://nbp-portal.vercel.app`. Add `https://nbp-portal.vercel.app/**` to the **Redirect URLs** allowlist. (Production Vercel domain is `nbp-portal.vercel.app` — NOT `natural-ball-player.vercel.app`.)
-2. **Enable leaked-password protection:** Supabase Dashboard → Authentication → Policies → toggle on "Leaked Password Protection" (checks HaveIBeenPwned).
+1. **Enable leaked-password protection:** Supabase Dashboard → Authentication → Policies → toggle on "Leaked Password Protection" (checks HaveIBeenPwned).
 
 ## Workflow
 - Trevor prefers batched feature requests and "commit push deploy" as a single flow

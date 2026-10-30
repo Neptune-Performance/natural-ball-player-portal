@@ -13,6 +13,14 @@
     "api/coach-task-digest.js": { "maxDuration": 60 },
     "api/slot-autoclean.js": { "maxDuration": 60 }
   },
+  "redirects": [
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "nbp-portal.vercel.app" }],
+      "destination": "https://www.thenatural-app.com/:path*",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     {
       "source": "/api/whoop/callback",
