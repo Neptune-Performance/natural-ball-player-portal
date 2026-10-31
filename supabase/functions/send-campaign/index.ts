@@ -53,13 +53,14 @@ const BATCH_PAUSE_MS = 350;          // ~3 req/s including the write round-trip 
 const TIME_BUDGET_MS = 60_000;       // return { resume: true } past this; edge wall clock is ~150s, leave room
 const PAGE = 1000;                   // paginated read size — must be <= db-max-rows
 
-// 🔴 The address campaigns come from. Cordell's decision, recorded on #281:
-// admin@thenaturalballplayer.com — the business domain, verified in Resend
-// on 2026-08-20 (DKIM + SPF + DMARC live, re-checked 2026-08-22).
-// It is NOT thenatural-app.com. Those two domains differ by one word and
-// have been confused before; thenatural-app.com is the app's own domain and
-// carries the transactional mail. Do not "tidy" this to match send-email.
-const FROM = "The Natural Ballplayer <admin@thenaturalballplayer.com>";
+// 🔴 The address campaigns come from: the app's own domain, the same one the
+// transactional mail uses, on Trevor's decision of 2026-10-31. Campaigns used to
+// send from admin@thenaturalballplayer.com (Cordell's choice on #281), until that
+// domain's Resend records vanished from its Hostinger DNS between 2026-10-24 and
+// 2026-10-28 and Resend refused every send as "domain is not verified".
+// Replies still go to the business inbox; those two domains differ by one word
+// and have been confused before, so keep FROM and REPLY_TO as they are.
+const FROM = "The Natural Ballplayer <noreply@thenatural-app.com>";
 const REPLY_TO = "admin@thenaturalballplayer.com";
 const SITE_URL = "https://www.thenaturalballplayer.com";
 // The app's own domain — where the unsubscribe confirmation page lives.
