@@ -13,6 +13,7 @@ import ExerciseNameInput from './ExerciseNameInput';
 import { metricsByGroup } from './assessmentMetrics';
 import { EXTERNAL_STAT_SOURCES, EXTERNAL_STATS_BUCKET, sourceInfo, sourceName } from './externalStatsSources';
 import { REGISTRATION_SITES, REGISTRATIONS_BUCKET, hasRegistrationProof } from './registrationSites';
+import LiftEntrySheet from './LiftEntrySheet'; // #475
 
 // Format a Date to local YYYY-MM-DD (avoids toISOString UTC drift)
 const fmtLocalDate = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -55,6 +56,7 @@ export default function CoachTools({ userRole, userId, onNavigateToProfile }) {
 
   const tabs = [
     { key: 'schedule', icon: Calendar, label: 'Schedule' },
+    { key: 'lifts', icon: Dumbbell, label: 'Lift Entry' },
     { key: 'stats', icon: TrendingUp, label: 'Player Stats' },
     { key: 'registrations', icon: FileText, label: 'Registrations' },
     { key: 'whoop', icon: Activity, label: 'WHOOP' },
@@ -82,6 +84,7 @@ export default function CoachTools({ userRole, userId, onNavigateToProfile }) {
         </div>
         <div className="p-6">
           {activeTab === 'schedule' && <ScheduleTab teams={teams} />}
+          {activeTab === 'lifts' && <LiftEntrySheet players={players} userId={userId} onNavigateToProfile={onNavigateToProfile} />}
           {activeTab === 'stats' && <PlayerStatsTab players={players} onNavigateToProfile={onNavigateToProfile} />}
           {activeTab === 'registrations' && <RegistrationsTab players={players} onNavigateToProfile={onNavigateToProfile} />}
           {activeTab === 'whoop' && <WhoopConnectionsTab players={players} onNavigateToProfile={onNavigateToProfile} />}

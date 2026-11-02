@@ -4781,7 +4781,7 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
           )}
 
           {activeProfileTab === 'records' && activeRecordsSubTab === 'lift_log' && (
-            <LiftLogTab userId={userId} />
+            <LiftLogTab userId={userId} viewerId={loggedInUserId} viewerRole={userRole} />
           )}
 
           {activeProfileTab === 'records' && activeRecordsSubTab === 'registration' && (
