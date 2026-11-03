@@ -3,7 +3,7 @@ import {
   Briefcase, Home, Calendar, MessageSquare, DollarSign,
   FileText, Users, Map, ArrowLeftRight, Menu, X,
   Upload, CheckSquare, Megaphone, FolderOpen, ChevronDown, ChevronRight,
-  ShoppingBag, UserPlus, BarChart3, Tag, Send, ListChecks
+  ShoppingBag, UserPlus, BarChart3, Tag, Send, ListChecks, Gauge
 } from 'lucide-react';
 import WorkHome from './WorkHome';
 import WorkDirectory from './WorkDirectory';
@@ -25,6 +25,7 @@ import BulkTagSessions from './BulkTagSessions';
 import Leads from './Leads';
 import UsageDashboard from './UsageDashboard';
 import AthleteOutreach from './AthleteOutreach';
+import PlayerCardCoverage from './PlayerCardCoverage';
 import NotificationBell, { deletePendingPayment, dismissEventAssignment } from './NotificationBell';
 import { useMainPortalCounts, useWorkPortalCounts, dismissPtVisitNotice, markAllPtVisitNoticesSeen } from './useNotifications';
 
@@ -53,6 +54,7 @@ const PAGE_META = {
   'work-bulk-tag':              { title: 'Bulk Tag Sessions',       description: 'Attach a package or plan to many training sessions at once.' },
   'work-admin-leads':           { title: 'Leads',                  description: 'Outside customers who signed up to book & pay for sessions.' },
   'work-admin-usage':           { title: 'Usage (V2 research)',    description: 'Anonymous product-usage analytics.' },
+  'work-card-coverage':         { title: 'Player Card Data',       description: 'Which athletes have data for each Player Card category, and when it was last measured.' },
   'work-admin-outreach':        { title: 'Athlete Outreach',       description: 'Remind athletes to buy packages and fill open cage time.' },
 };
 
@@ -215,6 +217,9 @@ export default function WorkPortalShell({ userId, userRole, userName, userAvatar
         return userRole === 'admin' ? <Leads /> : <ComingSoon viewKey={currentView} />;
       case 'work-admin-usage':
         return userRole === 'admin' ? <UsageDashboard /> : <ComingSoon viewKey={currentView} />;
+      // #478: admin + coach (the RPC behind it is staff-gated too).
+      case 'work-card-coverage':
+        return (userRole === 'admin' || userRole === 'coach') ? <PlayerCardCoverage /> : <ComingSoon viewKey={currentView} />;
       case 'work-admin-outreach':
         return userRole === 'admin' ? <AthleteOutreach userId={userId} /> : <ComingSoon viewKey={currentView} />;
       default:
@@ -355,6 +360,8 @@ function WorkSidebar({ userRole, userName, userAvatar, currentView, setCurrentVi
         <NavItem id="work-docs"      icon={FileText}      label="Documents" />
         <NavItem id="work-directory" icon={Users}         label="Directory" />
         <NavItem id="work-roadmap"   icon={Map}           label="Roadmap" />
+        {/* #478: every staff member, one path for both roles. */}
+        <NavItem id="work-card-coverage" icon={Gauge} label="Player Card Data" />
         {/* #311: coach-only — admins already reach this via Admin > Store's
             Bulk Tag Sessions tab, so this stays out of their nav to avoid a
             second, redundant path to the same tool. */}

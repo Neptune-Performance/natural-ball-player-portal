@@ -14,6 +14,9 @@
 //                         member has looked at it. Counts against the package.
 //   'sick'              — an admin or coach decided this one was illness or
 //                         injury. The session goes back to the athlete.
+//   'athlete_early'     — #477: the athlete cancelled themselves 5+ days ahead
+//                         (src/athleteCancel.js). Free: nothing is deducted and
+//                         it needs no review. Staff can still flip it either way.
 //
 // 'other' is the value the old athlete-chosen "Something else came up" button
 // wrote. It means the same thing as 'athlete_cancelled' and is read, never
@@ -22,6 +25,7 @@
 
 export const CANCEL_REASON_ATHLETE = 'athlete_cancelled';
 export const CANCEL_REASON_SICK = 'sick';
+export const CANCEL_REASON_EARLY = 'athlete_early';
 
 // Every value that means "not approved as sick" — the legacy 'other' and a
 // null reason included. Used for the "needs review" filter and for deciding
@@ -30,7 +34,14 @@ export function isSickCancel(reason) {
   return reason === CANCEL_REASON_SICK;
 }
 
+// No session used and nothing for staff to decide: sick, or cancelled with
+// 5+ days' notice (#477).
+export function isFreeCancel(reason) {
+  return reason === CANCEL_REASON_SICK || reason === CANCEL_REASON_EARLY;
+}
+
 export function cancelDecisionLabel(reason) {
   if (isSickCancel(reason)) return 'Sick / injured';
+  if (reason === CANCEL_REASON_EARLY) return "Free — 5+ days' notice";
   return 'Counts against athlete';
 }

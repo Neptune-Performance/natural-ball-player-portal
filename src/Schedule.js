@@ -17,7 +17,7 @@ import { allowancesForPurchases, sessionClass, weekRangeForDate, capWarningMessa
 import { CreateUserModal } from './AdminSettings';
 import { familyKey, familyLabel, sameFamily } from './productFamily';
 import { applySessionUsage } from './sessionUsage';
-import { CANCEL_REASON_ATHLETE } from './cancelReasons';
+import { canSelfCancel, cancelOwnReservation, sessionStart, SELF_CANCEL_RULE_TEXT, SELF_CANCEL_CLOSED_TEXT } from './athleteCancel';
 // #277: per-occurrence RSVP (Going / Not going / Maybe) + coach roster & nudge.
 import { EventRsvpSection } from './EventRsvp';
 import { readAllPages } from './readAllPages';
@@ -1148,6 +1148,20 @@ export default function Schedule({ userId, userRole, onMessageCoach, initialMode
   // (coachModalOpen below) — one implementation, two render call sites,
   // both driven by the same selectedCoach the rest of this file already
   // uses. No behaviour change from what these bodies did inline.
+  // #477: an athlete cancels their own booking straight from the coach's slot
+  // card (Schedule -> Facility / Lessons). Same rule and write as the My
+  // Schedule modal — src/athleteCancel.js.
+  const handleAthleteCancelSlot = async (slot, dateStr) => {
+    if (!window.confirm("Cancel this session? With 5+ days' notice it won't use a session from your package, and your spot opens up for someone else.")) return;
+    try {
+      await cancelOwnReservation({ slotId: slot.id, slotDate: dateStr, startTime: slot.start_time, userId });
+      if (selectedCoach) fetchCoachSlots(selectedCoach.id);
+      if (view === 'lessons') fetchLessonSlots();
+    } catch (err) {
+      alert('Could not cancel: ' + formatUserError(err));
+    }
+  };
+
   const handleConfirmReservation = async (reservationId, force = false) => {
     // #276: this is the coach-side booking decision — confirming is what puts
     // the athlete on the schedule — so the weekly-allowance check runs here
@@ -2303,6 +2317,7 @@ export default function Schedule({ userId, userRole, onMessageCoach, initialMode
                   onAddSlot={() => {}}
                   onReserve={(slot) => setShowReserveSlot(slot)}
                   onMessageCoach={(target) => setMessageCoachTarget(target)}
+                  onCancelReservation={handleAthleteCancelSlot}
                 />
               )}
             </div>
@@ -2513,6 +2528,7 @@ export default function Schedule({ userId, userRole, onMessageCoach, initialMode
                     onDecline={handleDeclineReservation}
                     onMarkAttendance={handleMarkAttendance}
                     onMessageCoach={(target) => setMessageCoachTarget(target)}
+                    onCancelReservation={handleAthleteCancelSlot}
                   />
                 ) : viewMode === 'lanes' ? (
                   <LaneView
@@ -3087,6 +3103,7 @@ export default function Schedule({ userId, userRole, onMessageCoach, initialMode
                 onDecline={handleDeclineReservation}
                 onMarkAttendance={handleMarkAttendance}
                 onMessageCoach={(target) => setMessageCoachTarget(target)}
+                onCancelReservation={handleAthleteCancelSlot}
               />
             </div>
           </div>
@@ -6694,8 +6711,8 @@ function EventDetailModal({ event, onClose, onDelete, onUpdate, userRole, userId
     onClick: (e) => { if (e.target === e.currentTarget && backdropMouseDown.current) requestClose(); },
   };
 
-  // Training-slot / private session (#233): players see a Cancel button with a
-  // 12h-before cutoff; staff get a read-only summary (slots are managed from the
+  // Training-slot / private session (#233): players see a Cancel button until
+  // 5 days before the start (#477); staff get a read-only summary (slots are managed from the
   // Slots tab, not from schedule_events, so the normal delete path doesn't apply).
   if (event.event_type === 'training_slot') {
     const fmtTime = (t) => {
@@ -6704,58 +6721,17 @@ function EventDetailModal({ event, onClose, onDelete, onUpdate, userRole, userId
       const hr = parseInt(h, 10);
       return `${hr % 12 || 12}:${m} ${hr >= 12 ? 'PM' : 'AM'}`;
     };
-    const startAt = new Date(`${event.event_date}T${event.start_time || '00:00'}:00`);
-    const CUTOFF_MS = 12 * 60 * 60 * 1000;
+    const startAt = sessionStart(event.event_date, event.start_time);
     const isPlayer = userRole === 'player';
-    const withinCancelWindow = Date.now() <= startAt.getTime() - CUTOFF_MS;
+    // #477: athletes self-cancel 5+ days out, free (src/athleteCancel.js).
+    // Inside that window they message the coach instead.
+    const withinCancelWindow = canSelfCancel(event.event_date, event.start_time);
 
-    // #306: the athlete no longer decides whether their own cancellation was
-    // "sick". Cordell: "Admins and coaches only choose if a cancellation was
-    // sick." So this writes one reason — athlete_cancelled, meaning "the
-    // athlete cancelled and nobody has looked at it yet" — and gives nothing
-    // back. Staff turn it into a sick cancel from the Cancellations tab in the
-    // Store area, which is where the give-back now happens.
-    //
-    // The package is deliberately NOT touched from here. It never really was:
-    // store_session_usage is staff-write and store_purchases is staff-update
-    // under RLS, so the old attended=true call from an athlete's own browser
-    // was refused with a 200 and an empty body every single time, and the
-    // swallowed error hid it. Rather than keep a write that cannot succeed,
-    // the deduction is a staff action on the review screen, and the athlete is
-    // told the truth: cancelling uses the session.
     const handleCancelReservation = async () => {
       setLoading(true);
       try {
-        const { data: resRow, error: findErr } = await supabase
-          .from('slot_reservations')
-          .select('id')
-          .eq('slot_id', event.id)
-          .eq('slot_date', event.event_date)
-          .eq('player_id', userId)
-          .in('status', ['confirmed', 'pending'])
-          .maybeSingle();
-        if (findErr) throw findErr;
-        if (!resRow) throw new Error('Could not find your reservation for this session.');
-        const now = new Date().toISOString();
-        const { data: updated, error: updErr } = await supabase
-          .from('slot_reservations')
-          .update({
-            status: 'cancelled',
-            cancelled_at: now,
-            cancel_reason: CANCEL_REASON_ATHLETE,
-            cancel_reason_by: userId,
-            cancel_reason_at: now,
-          })
-          .eq('id', resRow.id)
-          .select('id');
-        if (updErr) throw updErr;
-        // A refused write comes back as success with zero rows, so an empty
-        // array here is a failure that would otherwise show as "cancelled!"
-        // while the athlete is still on the roster.
-        if (!updated || updated.length === 0) {
-          throw new Error('Nothing was saved — the cancellation was refused. You are still booked in, so please tell your coach directly.');
-        }
-        alert('Session cancelled. It uses the session from your package. If you were ill or injured, a coach or admin can give it back.');
+        await cancelOwnReservation({ slotId: event.id, slotDate: event.event_date, startTime: event.start_time, userId });
+        alert("Session cancelled. With 5+ days' notice it doesn't use a session from your package.");
         onDelete();
       } catch (err) {
         alert('Error cancelling session: ' + formatUserError(err));
@@ -6796,15 +6772,12 @@ function EventDetailModal({ event, onClose, onDelete, onUpdate, userRole, userId
             {isPlayer && (
               withinCancelWindow ? (
                 showCancelConfirm ? (
-                  /* #306: the athlete used to pick their own reason here, and
-                     picking "I'm sick / injured" handed the session straight
-                     back. That choice is now a staff one, so this step is a
-                     plain confirmation with the consequence stated. The copy
-                     says staff CAN give the session back, not that they will —
-                     the whole point of the change is that it is their call. */
+                  /* #477: only reachable 5+ days out, where a self-cancel is
+                     free by rule — so the confirmation states that, rather
+                     than #306's "this uses your session". */
                   <div className="space-y-2 pt-2">
-                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
-                      Cancelling uses the session from your package. If you are ill or injured, tell your coach — an admin or coach can give the session back.
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800">
+                      You're cancelling with 5+ days' notice, so this won't use a session from your package. Your spot opens up for someone else.
                     </div>
                     <button
                       onClick={handleCancelReservation}
@@ -6823,12 +6796,12 @@ function EventDetailModal({ event, onClose, onDelete, onUpdate, userRole, userId
                     >
                       Cancel this session
                     </button>
-                    <p className="text-xs text-gray-500 text-center">Cancellations are allowed up to 12 hours before the session.</p>
+                    <p className="text-xs text-gray-500 text-center">{SELF_CANCEL_RULE_TEXT}</p>
                   </div>
                 )
               ) : (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
-                  Cancellations close 12 hours before the session. Please contact your coach if you can't make it.
+                  {SELF_CANCEL_CLOSED_TEXT}
                 </div>
               )
             )}
@@ -8913,7 +8886,7 @@ const ATTENDANCE_OPTIONS = [
 // #452: `coachesById` switches this to a multi-coach grid (the athlete Private
 // Lessons tab): each card resolves its own coach from slot.coach_id and shows
 // the coach's name. Without it, `coach` is the single coach, as before.
-function CoachSlotsWeekView({ selectedDate, slots, reservations, publicBookings = [], bookedCounts = {}, coach, coachesById = null, userId, userRole, canManage, onAddSlot, onReserve, onConfirm, onDecline, onMarkAttendance, selecting, selectedIds, onToggleSelect, onEventContextMenu, onSlotDrop, onMessageCoach }) {
+function CoachSlotsWeekView({ selectedDate, slots, reservations, publicBookings = [], bookedCounts = {}, coach, coachesById = null, userId, userRole, canManage, onAddSlot, onReserve, onConfirm, onDecline, onMarkAttendance, selecting, selectedIds, onToggleSelect, onEventContextMenu, onSlotDrop, onMessageCoach, onCancelReservation }) {
   const startOfWeek = new Date(selectedDate);
   startOfWeek.setDate(selectedDate.getDate() - selectedDate.getDay());
   startOfWeek.setHours(0, 0, 0, 0);
@@ -8924,7 +8897,7 @@ function CoachSlotsWeekView({ selectedDate, slots, reservations, publicBookings 
   // Any staff member can SEE who's booked in any coach's slots; managing the
   // reservations (confirm/decline/attendance) stays with the slot's coach + admin.
   const isStaffViewer = userRole === 'admin' || userRole === 'coach';
-  // Player bookings close 12h before the session starts (mirrors the #233 cancel cutoff).
+  // Player bookings close 12h before the session starts.
   const RESERVE_CUTOFF_MS = 12 * 60 * 60 * 1000;
   const isBookingClosed = (slot, dateStr) =>
     Date.now() > new Date(`${dateStr}T${(slot.start_time || '00:00').slice(0, 5)}:00`).getTime() - RESERVE_CUTOFF_MS;
@@ -9070,6 +9043,20 @@ function CoachSlotsWeekView({ selectedDate, slots, reservations, publicBookings 
                         >
                           Message coach
                         </button>
+                      )}
+                      {/* #477: free self-cancel 5+ days out; inside that the
+                          Message coach button above is the route. */}
+                      {userRole === 'player' && userRes && (userRes.status === 'pending' || userRes.status === 'confirmed') && onCancelReservation && (
+                        canSelfCancel(dateStr, slot.start_time) ? (
+                          <button
+                            onClick={() => onCancelReservation(slot, dateStr)}
+                            className="mt-1.5 w-full border border-red-300 text-red-600 py-1 rounded text-xs font-medium hover:bg-red-50 transition touch-manipulation"
+                          >
+                            Cancel session
+                          </button>
+                        ) : (
+                          <div className="mt-1 text-[11px] leading-tight text-gray-400">Cancelling closes 5 days before — message your coach</div>
+                        )
                       )}
                       {!isOwnSlots && isBooked && !userRes && <div className="mt-1 text-xs text-gray-400">Fully booked</div>}
                     </div>
@@ -9716,7 +9703,7 @@ function ReserveSlotModal({ slot, coach, onClose, onSuccess }) {
     return `${hour % 12 || 12}:${m} ${hour >= 12 ? 'PM' : 'AM'}`;
   };
 
-  // Bookings close 12h before the session starts (mirrors the #233 cancel cutoff).
+  // Bookings close 12h before the session starts.
   const RESERVE_CUTOFF_MS = 12 * 60 * 60 * 1000;
   const slotStartAt = new Date(`${slot.slot_date}T${(slot.start_time || '00:00').slice(0, 5)}:00`);
   const bookingClosed = Date.now() > slotStartAt.getTime() - RESERVE_CUTOFF_MS;
