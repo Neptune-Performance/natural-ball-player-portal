@@ -120,7 +120,7 @@ function campaignHtml(bodyHtml: string, unsubUrl: string): string {
 <tr><td align="center" style="padding:24px 12px;">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background-color:#ffffff;border-radius:8px;">
 <tr><td style="padding:32px 28px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:#1a1a1a;">
-${bodyHtml}
+${styleImages(bodyHtml)}
 </td></tr>
 <tr><td style="padding:0 28px 28px;">
 <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 16px;">
@@ -134,6 +134,14 @@ ${postal}<a href="${unsubUrl}" style="color:#6b7280;">Unsubscribe from these ema
 </table>
 </body>
 </html>`;
+}
+
+// #480: library images are full-size uploads. An inline max-width (Gmail
+// drops <style> in some clients) keeps each one inside the 600px column. An
+// <img> that already has a style is left alone.
+function styleImages(html: string): string {
+  return html.replace(/<img\b(?![^>]*\bstyle=)([^>]*)>/gi,
+    '<img$1 style="max-width:100%;height:auto;display:block;border:0;margin:8px 0;">');
 }
 
 function htmlToText(html: string): string {

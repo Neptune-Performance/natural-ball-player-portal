@@ -60,6 +60,12 @@ verify_jwt = false
 [functions.calendar-feed]
 verify_jwt = false
 
+# #481: "Forgot password" with a parent email. Called from the logged-out
+# login form. Always answers ok (no enumeration); mail only goes to the parent
+# address already on the athlete's record; 60s per-athlete throttle.
+[functions.parent-password-reset]
+verify_jwt = false
+
 # Everything else (whoop, create-user, delete-user, update-user-email,
 # send-email, send-campaign, reset-user-password, square-checkout,
 # square-catalog-sync, square-apply-discount, square-subscriptions-backfill,

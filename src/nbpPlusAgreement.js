@@ -29,6 +29,11 @@ const TERM_TOTAL_CENTS = {
   12: { remote: 600000, in_house: 750000 },
 };
 
+// #482: during a high school, college or pro season the training price is
+// cut by this fraction for those months (clause the athlete initials). Staff
+// apply it per month; the signed price_cents is the full-term price.
+export const IN_SEASON_DISCOUNT = 0.5;
+
 export function agreementPricing(termMonths, trainingType) {
   const total = TERM_TOTAL_CENTS[termMonths]?.[trainingType];
   if (!total) return null;

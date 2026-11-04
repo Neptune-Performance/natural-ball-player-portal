@@ -131,6 +131,50 @@ export function extractStatCandidates(grid) {
   return [...byName.values()];
 }
 
+// #479: a hand-typed doc of "LABEL value" lines, e.g. Jimmy Facilla's
+//   HITTING STATS / PA 124 / AVG .291 / OBP.479 / ... / NO PITCHING STATS
+// A line with no number that names a section switches section; before any
+// section heading, pitching-only labels go to pitching and the rest batting.
+// Several pairs on one line ("PA 124 AB 86") are fine. One athlete only.
+const PAIR_RE = /(^|[^A-Z0-9#])([A-Z#]+)\s*:?\s*(-?\d*\.?\d+)(?![\d.%])/gi;
+export function extractLabelValueStats(text) {
+  const out = { name: null, batting: {}, pitching: {} };
+  let section = null;
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (!/\d/.test(line)) {
+      const word = U(line).split(/[^A-Z]+/).find((w) => SECTION[w]);
+      if (word) section = SECTION[word];
+      continue;
+    }
+    if (section === 'fielding') continue;
+    PAIR_RE.lastIndex = 0;
+    let m;
+    while ((m = PAIR_RE.exec(line))) {
+      const label = U(m[2]);
+      const sec = section || (PIT_ONLY.has(label) ? 'pitching' : 'batting');
+      const key = (sec === 'pitching' ? PIT_HEADERS : BAT_HEADERS)[label];
+      const v = num(m[3]);
+      if (key && v != null && out[sec][key] == null) out[sec][key] = v;
+    }
+  }
+  return Object.keys(out.batting).length || Object.keys(out.pitching).length ? [out] : [];
+}
+
+// Text from a linked doc/sheet -> candidates. Tables first (tab- or comma-
+// separated rows, as a sheet's CSV or a doc table exports), then loose lines.
+export function extractStatCandidatesFromText(text, parseCsv) {
+  const s = String(text || '');
+  const grids = [s.split(/\r?\n/).map((l) => l.split('\t'))];
+  if (parseCsv) grids.push(parseCsv(s));
+  for (const g of grids) {
+    const found = extractStatCandidates(g);
+    if (found.length) return found;
+  }
+  return extractLabelValueStats(s);
+}
+
 const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z ]/g, '').replace(/\s+/g, ' ').trim();
 
 // The candidate that is this athlete, or null when it cannot be told apart.

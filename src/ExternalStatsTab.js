@@ -9,6 +9,11 @@
 // that feeds the Player Card's Game Play grade. Choosing a CSV / XLSX reads the
 // numbers into the boxes below (finding this athlete's row in a team export);
 // the uploader checks them before saving. Screenshots and links: type them.
+//
+// #479: a public Google Doc / Sheet link is read too (fetch-stat-link edge
+// function returns its text export): "Read numbers from link", and on save
+// when the boxes are empty. GameChanger pages need a login, so those still
+// mean typing or attaching GameChanger's CSV export.
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from './supabaseClient';
@@ -17,13 +22,31 @@ import { formatUserError } from './errorMessage';
 import {
   EXTERNAL_STAT_SOURCES, EXTERNAL_STATS_BUCKET, sourceInfo, sourceName, safeFileName, normalizeUrl,
 } from './externalStatsSources';
-import { readStatGrid, isReadableStatFile } from './statFileReader';
+import { readStatGrid, isReadableStatFile, parseCsv } from './statFileReader';
 import {
-  BATTING_FIELDS, PITCHING_FIELDS, extractStatCandidates, pickCandidate, normalizeStatLine, statLineSummary,
+  BATTING_FIELDS, PITCHING_FIELDS, extractStatCandidates, extractStatCandidatesFromText, pickCandidate, normalizeStatLine, statLineSummary,
 } from './externalStatLine';
+
+const isGoogleStatLink = (url) => /^https:\/\/docs\.google\.com\/(document|spreadsheets)\/d\//i.test(String(url || '').trim());
+const LINK_ERRORS = {
+  not_public: 'That Google link is not shared publicly. In Google, choose Share → "Anyone with the link", then try again, or type the totals below.',
+  not_found: 'Google says that document does not exist. Check the link, or type the totals below.',
+  unsupported: 'Only Google Docs and Sheets links can be read. Type the totals below.',
+  too_large: 'That document is too large to read. Type the totals below.',
+};
+
+// Text of a public Google Doc / Sheet via the edge function. Throws a
+// user-facing message on failure.
+async function fetchLinkText(url) {
+  const { data, error } = await supabase.functions.invoke('fetch-stat-link', { body: { url: url.trim() } });
+  if (error) throw new Error(formatUserError(error));
+  if (data?.error) throw new Error(LINK_ERRORS[data.error] || 'Could not read that link. Type the totals below.');
+  return data?.text || '';
+}
 
 const emptyStats = () => ({ batting: {}, pitching: {} });
 const emptyDraft = () => ({ source: 'gamechanger', source_label: '', title: '', season: '', profile_url: '', notes: '', file: null, stats: emptyStats(), statsOrigin: 'manual', matchedName: null });
+const statsAreEmpty = (stats) => ['batting', 'pitching'].every((sec) => Object.values(stats?.[sec] || {}).every((v) => String(v ?? '').trim() === ''));
 
 // Saved stat_line -> the strings shown in the boxes.
 const statsFromLine = (line) => {
@@ -73,11 +96,11 @@ export default function ExternalStatsTab({ userId, loggedInUserId, userRole }) {
       .then(({ data }) => setAthleteName(data?.full_name || ''));
   }, [userId]);
 
-  const applyCandidate = (c, fileName, base) => {
+  const applyCandidate = (c, fileName, base, origin = 'file') => {
     setDraft((d) => ({
       ...(base || d),
       stats: statsFromLine(normalizeStatLine({ batting: c.batting, pitching: c.pitching }) || {}),
-      statsOrigin: 'file',
+      statsOrigin: origin,
       matchedName: c.name,
     }));
     setCandidates([]);
@@ -110,6 +133,30 @@ export default function ExternalStatsTab({ userId, loggedInUserId, userRole }) {
     } finally {
       setReading(false);
     }
+  };
+
+  // #479: read a public Google Doc / Sheet into the boxes (same review step
+  // as a file). Returns the chosen candidate, or null.
+  const readLink = async (url) => {
+    setReadNote(null);
+    setCandidates([]);
+    setReading(true);
+    try {
+      const found = extractStatCandidatesFromText(await fetchLinkText(url), parseCsv);
+      if (!found.length) {
+        setReadNote({ kind: 'warn', text: 'No batting or pitching numbers were found in that link. Type the season totals below instead.' });
+        return null;
+      }
+      const mine = pickCandidate(found, athleteName);
+      if (mine) { applyCandidate(mine, 'the link', null, 'link'); return mine; }
+      setCandidates(found.filter((c) => c.name).map((c) => ({ ...c, _origin: 'link' })));
+      setReadNote({ kind: 'warn', text: `That link has ${found.length} players and none is clearly ${athleteName || 'this athlete'}. Pick the right row:` });
+    } catch (err) {
+      setReadNote({ kind: 'error', text: err.message });
+    } finally {
+      setReading(false);
+    }
+    return null;
   };
 
   const readSavedFile = async (row) => {
@@ -146,6 +193,22 @@ export default function ExternalStatsTab({ userId, loggedInUserId, userRole }) {
     if (!url && !draft.file && !keepsFile) { alert('Add a link to your profile or attach a file (or both).'); return; }
     if (draft.source === 'other' && !draft.source_label.trim()) { alert('Tell us where these stats are from.'); return; }
 
+    // #479: nothing typed and a Google link -> read it now rather than save
+    // an entry the Player Card can't use. A failed read still saves the link.
+    let stats = draft.stats;
+    let statsOrigin = draft.statsOrigin;
+    let matchedName = draft.matchedName;
+    if (statsAreEmpty(stats) && !draft.file && isGoogleStatLink(url)) {
+      const got = await readLink(url);
+      if (got) {
+        stats = statsFromLine(normalizeStatLine({ batting: got.batting, pitching: got.pitching }) || {});
+        statsOrigin = 'link';
+        matchedName = got.name;
+      } else if (!window.confirm('No numbers could be read from that link, so this entry will not count on the Player Card. Save it anyway?')) {
+        return;
+      }
+    }
+
     setSaving(true);
     let file_url = editing?.file_url || null;
     let file_name = editing?.file_name || null;
@@ -161,11 +224,11 @@ export default function ExternalStatsTab({ userId, loggedInUserId, userRole }) {
     }
 
     const stat_line = normalizeStatLine({
-      batting: draft.stats.batting,
-      pitching: draft.stats.pitching,
-      origin: draft.statsOrigin,
-      file_name: draft.statsOrigin === 'file' ? file_name : undefined,
-      matched_name: draft.statsOrigin === 'file' ? (draft.matchedName || undefined) : undefined,
+      batting: stats.batting,
+      pitching: stats.pitching,
+      origin: statsOrigin,
+      file_name: statsOrigin === 'file' ? file_name : undefined,
+      matched_name: statsOrigin !== 'manual' ? (matchedName || undefined) : undefined,
     });
     const payload = {
       stat_line,
@@ -255,6 +318,16 @@ export default function ExternalStatsTab({ userId, loggedInUserId, userRole }) {
             placeholder="https://..."
             className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
+          {isGoogleStatLink(draft.profile_url) ? (
+            <div className="flex flex-wrap items-center gap-2 mt-1.5">
+              <button type="button" onClick={() => readLink(draft.profile_url)} disabled={reading} className="px-2.5 py-1.5 border border-blue-300 text-blue-700 rounded-lg text-xs font-medium hover:bg-blue-50 disabled:opacity-50">
+                {reading ? 'Reading…' : 'Read numbers from link'}
+              </button>
+              <span className="text-xs text-gray-500">The doc must be shared as "Anyone with the link".</span>
+            </div>
+          ) : draft.profile_url.trim() && (
+            <p className="text-xs text-gray-500 mt-1">Numbers can be read from a public Google Doc or Sheet link. For GameChanger and other sites, attach their CSV export or type the totals below.</p>
+          )}
         </div>
         <div className="md:col-span-2">
           <label className="block text-xs font-medium text-gray-700 mb-1">
@@ -279,7 +352,7 @@ export default function ExternalStatsTab({ userId, loggedInUserId, userRole }) {
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
               <p className="text-sm font-medium text-gray-900 flex items-center gap-1.5"><BarChart3 size={15} className="text-blue-600" />Season totals for the Player Card</p>
-              <p className="text-xs text-gray-500 mt-0.5">These count toward the Game Play rating. Read automatically from a CSV / XLSX; otherwise type what you have. Leave blank what you don't.</p>
+              <p className="text-xs text-gray-500 mt-0.5">These count toward the Game Play rating. Read automatically from a CSV / XLSX or a public Google Doc / Sheet link; otherwise type what you have. Leave blank what you don't.</p>
             </div>
             {(() => {
               const ed = editingId ? rows.find((r) => r.id === editingId) : null;
@@ -297,7 +370,7 @@ export default function ExternalStatsTab({ userId, loggedInUserId, userRole }) {
           {candidates.length > 0 && (
             <select
               defaultValue=""
-              onChange={(e) => { const c = candidates[Number(e.target.value)]; if (c) applyCandidate(c, draft.file?.name || 'the file'); }}
+              onChange={(e) => { const c = candidates[Number(e.target.value)]; if (c) applyCandidate(c, c._origin === 'link' ? 'the link' : (draft.file?.name || 'the file'), null, c._origin || 'file'); }}
               className="w-full px-3 py-2 border border-amber-300 rounded-lg text-sm bg-white"
             >
               <option value="" disabled>Choose a player row…</option>
