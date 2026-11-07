@@ -66,12 +66,13 @@ export const RATING_CATEGORIES = [
     ],
   },
   {
-    // No fielding data is recorded yet (the Fielding Assessment template has 0
-    // submissions as of 2026-10-29). Catcher pop time lights up when logged in
-    // Practice Stats; everyone else is coach-rated.
+    // Catcher pop time from Practice Stats, plus #487 season fielding % from
+    // external_season_stats (GameChanger screenshots, last 3 seasons, recent
+    // seasons weighted more, 20+ chances). Everyone else is coach-rated.
     key: 'fielding', label: 'Fielding', short: 'FLD', weight: 1,
     metrics: [
       { key: 'fld_pop_time', label: 'Pop time (catchers)', unit: 's', mode: 'percentile', weight: 1, lowerIsBetter: true },
+      { key: 'fld_season_fpct', label: 'Season fielding % (20+ chances)', unit: 'avg', mode: 'absolute', poor: 0.9, elite: 0.985, weight: 1 },
     ],
   },
   {
@@ -126,11 +127,15 @@ export const RATING_CATEGORIES = [
     // months): the upload form reads the CSV / XLSX — or the athlete types the
     // numbers for a screenshot / link — into external_stats.stat_line, and the
     // rates are combined across uploads weighted by PA / outs / batters faced.
+    // #487: season lines read from stat screenshots (external_season_stats,
+    // last 3 seasons) join the same pool, weighted by season age too (this
+    // year 1, last year 0.7, then 0.45, 0.25).
     key: 'game_play', label: 'Game Play', short: 'GAME', weight: 1,
     metrics: [
       { key: 'gp_season_obp', label: 'Season OBP (15+ PA)', unit: 'avg', mode: 'absolute', poor: 0.25, elite: 0.45, weight: 2 },
       { key: 'gp_season_ops', label: 'Season OPS (15+ PA)', unit: 'avg', mode: 'absolute', poor: 0.55, elite: 1.0, weight: 1 },
       { key: 'gp_season_whip', label: 'Season WHIP (5+ IP)', unit: '', mode: 'absolute', poor: 2.5, elite: 0.9, weight: 2 },
+      { key: 'gp_season_era', label: 'Season ERA (5+ IP)', unit: '', mode: 'absolute', poor: 7, elite: 1.5, weight: 1 },
       { key: 'gp_season_k_pct', label: 'Season strikeout % (20+ BF)', unit: '%', mode: 'absolute', poor: 10, elite: 30, weight: 1 },
       { key: 'gp_strike_pct', label: 'Strike % (outings, 50+ pitches)', unit: '%', mode: 'absolute', poor: 50, elite: 68, weight: 1 },
       { key: 'gp_whip', label: 'WHIP (outings, 3+ IP)', unit: '', mode: 'absolute', poor: 2.5, elite: 0.9, weight: 1 },
@@ -243,7 +248,7 @@ export function formatMetricValue(m) {
   // Baseball rate stats print the baseball way: .842, 1.077.
   if (m.unit === 'avg') return v < 1 ? v.toFixed(3).replace(/^0/, '') : v.toFixed(3);
   if (m.unit === 's') s = v.toFixed(2);
-  else if (m.key === 'gp_whip' || m.key === 'gp_season_whip') s = v.toFixed(2);
+  else if (m.key === 'gp_whip' || m.key === 'gp_season_whip' || m.key === 'gp_season_era') s = v.toFixed(2);
   else if (Math.abs(v) >= 100) s = String(Math.round(v));
   else s = String(Math.round(v * 10) / 10);
   return m.unit ? `${s}${m.unit === '%' ? '%' : ` ${m.unit}`}` : s;

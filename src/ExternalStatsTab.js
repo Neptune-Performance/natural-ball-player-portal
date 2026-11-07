@@ -14,6 +14,12 @@
 // function returns its text export): "Read numbers from link", and on save
 // when the boxes are empty. GameChanger pages need a login, so those still
 // mean typing or attaching GameChanger's CSV export.
+//
+// #487: GameChanger (or any) stat SCREENSHOTS are read by stats-extract
+// (Claude vision) into external_season_stats, one line per season per
+// category, reviewed before saving: the "Season stats" block (SeasonStats.js).
+// A link alone still contributes nothing to the Player Card, so the form says
+// so and points at the screenshot import.
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { supabase } from './supabaseClient';
@@ -22,6 +28,7 @@ import { formatUserError } from './errorMessage';
 import {
   EXTERNAL_STAT_SOURCES, EXTERNAL_STATS_BUCKET, sourceInfo, sourceName, safeFileName, normalizeUrl,
 } from './externalStatsSources';
+import SeasonStats from './SeasonStats';
 import { readStatGrid, isReadableStatFile, parseCsv } from './statFileReader';
 import {
   BATTING_FIELDS, PITCHING_FIELDS, extractStatCandidates, extractStatCandidatesFromText, pickCandidate, normalizeStatLine, statLineSummary,
@@ -326,7 +333,10 @@ export default function ExternalStatsTab({ userId, loggedInUserId, userRole }) {
               <span className="text-xs text-gray-500">The doc must be shared as "Anyone with the link".</span>
             </div>
           ) : draft.profile_url.trim() && (
-            <p className="text-xs text-gray-500 mt-1">Numbers can be read from a public Google Doc or Sheet link. For GameChanger and other sites, attach their CSV export or type the totals below.</p>
+            <p className="text-xs text-amber-800 bg-amber-50 rounded-md px-2 py-1.5 mt-1.5">
+              A {draft.source === 'gamechanger' ? 'GameChanger' : 'profile'} link on its own does not count on the Player Card ({draft.source === 'gamechanger' ? 'GameChanger pages need a login, so the app cannot read them' : 'the app cannot read that site'}).
+              Save the link for your coaches, then use <span className="font-medium">Import stats from screenshots</span> under Season stats to add the numbers.
+            </p>
           )}
         </div>
         <div className="md:col-span-2">
@@ -440,6 +450,8 @@ export default function ExternalStatsTab({ userId, loggedInUserId, userRole }) {
         )}
       </div>
 
+      <SeasonStats userId={userId} loggedInUserId={loggedInUserId} canManage={canManage} />
+
       {adding && form}
 
       {loading ? (
@@ -477,8 +489,8 @@ export default function ExternalStatsTab({ userId, loggedInUserId, userRole }) {
                           </p>
                         ) : canManage && (
                           <p className="text-xs text-gray-500 mt-1.5">
-                            Not counted on the Player Card yet.{' '}
-                            <button onClick={() => startEdit(row)} className="text-blue-600 hover:underline">Add the season totals</button>
+                            {row.profile_url && !row.file_url ? 'A link alone is not counted on the Player Card. Use "Import stats from screenshots" above, or ' : 'Not counted on the Player Card yet. '}
+                            <button onClick={() => startEdit(row)} className="text-blue-600 hover:underline">{row.profile_url && !row.file_url ? 'type the season totals' : 'Add the season totals'}</button>
                           </p>
                         )}
                         <div className="flex flex-wrap gap-2 mt-2">
