@@ -436,6 +436,9 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
   const canSeeNotes = userRole === 'admin' || userRole === 'coach';
   // #422: an athlete may READ their own notes (the DB hides Disciplinary).
   const canReadOwnNotes = userRole === 'player' && loggedInUserId === userId;
+  // #486: a player on their own profile can add PT notes and edit/delete the
+  // ones they wrote; staff-authored visits stay read-only to them.
+  const canSelfLogPt = userRole === 'player' && loggedInUserId === userId;
   const canViewNotes = canSeeNotes || canReadOwnNotes;
   // Fail-closed health sub-tab: filter by role/age; mental is modal-only so never a content key.
   const visibleHealthSubTabs = HEALTH_SUB_TABS.filter(sub => {
@@ -3412,16 +3415,17 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
                 currentUserId={loggedInUserId}
               />
 
-              {/* Add Visit Button */}
-              {(userRole === 'admin' || userRole === 'coach') && editingPtVisitId !== 'new' && (
-                <div className="flex justify-between items-center">
+              {/* Add Visit Button. #486: athletes log their own PT notes on
+                  their own profile (RLS: own rows they authored). */}
+              {(userRole === 'admin' || userRole === 'coach' || canSelfLogPt) && editingPtVisitId !== 'new' && (
+                <div className="flex justify-between items-center gap-2">
                   <h4 className="text-sm font-semibold text-gray-700">Visit Log ({ptVisits.length})</h4>
                   <button
                     onClick={startNewPtVisit}
-                    className="bg-blue-600 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-blue-700 transition flex items-center space-x-1 text-sm"
+                    className="bg-blue-600 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-blue-700 transition flex items-center space-x-1 text-sm shrink-0"
                   >
                     <Plus size={14} />
-                    <span>Add Visit</span>
+                    <span>{canSelfLogPt ? 'Add PT Note' : 'Add Visit'}</span>
                   </button>
                 </div>
               )}
@@ -3453,7 +3457,8 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
               )}
               <div className="space-y-3">
                 {ptVisits.map(v => {
-                  const canModify = (userRole === 'admin' || userRole === 'coach');
+                  const canModify = (userRole === 'admin' || userRole === 'coach')
+                    || (canSelfLogPt && v.created_by === loggedInUserId);
                   return (
                     <div key={v.id} className="border border-gray-200 rounded-lg p-4">
                       {editingPtVisitId === v.id ? (
