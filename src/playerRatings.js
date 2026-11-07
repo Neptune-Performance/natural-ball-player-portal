@@ -122,10 +122,16 @@ export const RATING_CATEGORIES = [
   },
   {
     // Practice / scrimmage / lives logs from the profile Stats tab (last 12
-    // months). Uploaded GameChanger / Perfect Game files are PDFs and links,
-    // not numbers, so season stats are coach-rated for now.
+    // months), plus #476 season stats from External Stats uploads (last 18
+    // months): the upload form reads the CSV / XLSX — or the athlete types the
+    // numbers for a screenshot / link — into external_stats.stat_line, and the
+    // rates are combined across uploads weighted by PA / outs / batters faced.
     key: 'game_play', label: 'Game Play', short: 'GAME', weight: 1,
     metrics: [
+      { key: 'gp_season_obp', label: 'Season OBP (15+ PA)', unit: 'avg', mode: 'absolute', poor: 0.25, elite: 0.45, weight: 2 },
+      { key: 'gp_season_ops', label: 'Season OPS (15+ PA)', unit: 'avg', mode: 'absolute', poor: 0.55, elite: 1.0, weight: 1 },
+      { key: 'gp_season_whip', label: 'Season WHIP (5+ IP)', unit: '', mode: 'absolute', poor: 2.5, elite: 0.9, weight: 2 },
+      { key: 'gp_season_k_pct', label: 'Season strikeout % (20+ BF)', unit: '%', mode: 'absolute', poor: 10, elite: 30, weight: 1 },
       { key: 'gp_strike_pct', label: 'Strike % (outings, 50+ pitches)', unit: '%', mode: 'absolute', poor: 50, elite: 68, weight: 1 },
       { key: 'gp_whip', label: 'WHIP (outings, 3+ IP)', unit: '', mode: 'absolute', poor: 2.5, elite: 0.9, weight: 1 },
       { key: 'gp_on_base_pct', label: 'On-base % (at-bats, 10+ PA)', unit: '%', mode: 'absolute', poor: 20, elite: 50, weight: 1 },
@@ -234,8 +240,10 @@ export function formatMetricValue(m) {
   if (m.value == null) return '—';
   const v = m.value;
   let s;
+  // Baseball rate stats print the baseball way: .842, 1.077.
+  if (m.unit === 'avg') return v < 1 ? v.toFixed(3).replace(/^0/, '') : v.toFixed(3);
   if (m.unit === 's') s = v.toFixed(2);
-  else if (m.key === 'gp_whip') s = v.toFixed(2);
+  else if (m.key === 'gp_whip' || m.key === 'gp_season_whip') s = v.toFixed(2);
   else if (Math.abs(v) >= 100) s = String(Math.round(v));
   else s = String(Math.round(v * 10) / 10);
   return m.unit ? `${s}${m.unit === '%' ? '%' : ` ${m.unit}`}` : s;
@@ -245,7 +253,8 @@ export function formatMetricValue(m) {
 export function metricBasis(m) {
   if (m.value == null) return 'Not measured yet';
   if (m.mode === 'absolute') {
-    return m.rating == null ? 'Not graded' : `Scale: ${m.poor} = ${RATING_FLOOR}, ${m.elite} = ${RATING_CEIL}`;
+    const fmt = (n) => (m.unit === 'avg' && n < 1 ? n.toFixed(3).replace(/^0/, '') : n);
+    return m.rating == null ? 'Not graded' : `Scale: ${fmt(m.poor)} = ${RATING_FLOOR}, ${fmt(m.elite)} = ${RATING_CEIL}`;
   }
   if (m.percentile == null) return `Not graded yet (only ${m.cohortN || 0} athletes have this)`;
   return `Better than ${Math.round(m.percentile)}% of ${COHORT_LABELS[m.cohort] || m.cohort} (${m.cohortN})`;

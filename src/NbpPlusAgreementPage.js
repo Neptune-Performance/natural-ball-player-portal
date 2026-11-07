@@ -4,7 +4,7 @@ import { CheckCircle, AlertTriangle, FileSignature, Clock } from 'lucide-react';
 import { formatUserError } from './errorMessage';
 import {
   TERM_OPTIONS, TRAINING_TYPE_OPTIONS, PAYMENT_OPTIONS,
-  agreementPricing, agreementPrice, fmtUsd, termEndDate, isUnder18,
+  agreementPricing, agreementPrice, fmtUsd, termEndDate, isUnder18, IN_SEASON_DISCOUNT,
   fetchAgreementDoc,
 } from './nbpPlusAgreement';
 
@@ -135,6 +135,7 @@ export default function NbpPlusAgreementPage({ userId, userRole, athleteId, onSi
   const [initPayment, setInitPayment] = useState('');
   const [initRequirements, setInitRequirements] = useState('');
   const [initEarlyStop, setInitEarlyStop] = useState('');
+  const [initInSeason, setInitInSeason] = useState('');
 
   // Signatures
   const [athleteSig, setAthleteSig] = useState('');
@@ -201,7 +202,7 @@ export default function NbpPlusAgreementPage({ userId, userRole, athleteId, onSi
     if (!paymentOption) return 'Choose a payment option.';
     if (!startDate) return 'Enter a start date.';
     if (!chosen) return 'Could not work out the price for that term and training type.';
-    if (!initPayment.trim() || !initRequirements.trim() || !initEarlyStop.trim()) return 'Add your initials to all three boxes.';
+    if (!initPayment.trim() || !initRequirements.trim() || !initEarlyStop.trim() || !initInSeason.trim()) return 'Add your initials to all four boxes.';
     if (!athleteSig.trim()) return 'Type the athlete\'s full legal name to sign.';
     if (minor) {
       if (!parentName.trim()) return 'A parent or guardian name is required for an athlete under 18.';
@@ -238,6 +239,7 @@ export default function NbpPlusAgreementPage({ userId, userRole, athleteId, onSi
         initials_payment: initPayment.trim(),
         initials_requirements: initRequirements.trim(),
         initials_early_stop: initEarlyStop.trim(),
+        initials_in_season: initInSeason.trim(),
         athlete_signature: athleteSig.trim(),
         athlete_signed_at: now,
         parent_signature: parentSig.trim() || null,
@@ -351,10 +353,14 @@ export default function NbpPlusAgreementPage({ userId, userRole, athleteId, onSi
               <Readout label="End date" value={fmtDate(existing.end_date)} />
               <Readout label="Price (pre-tax)" value={`${fmtUsd(existing.price_cents)}${existing.monthly_cents ? ` · ${fmtUsd(existing.monthly_cents)} / month` : ''}`} />
             </div>
-            <div className="mt-4 grid sm:grid-cols-3 gap-3 text-xs text-gray-600">
+            <div className={`mt-4 grid gap-3 text-xs text-gray-600 ${existing.initials_in_season ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
               <div><span className="font-semibold text-gray-800">{existing.initials_payment}</span> — committing to every payment for the term</div>
               <div><span className="font-semibold text-gray-800">{existing.initials_requirements}</span> — biomechanics assessment + WHOOP Peak</div>
               <div><span className="font-semibold text-gray-800">{existing.initials_early_stop}</span> — stopping early does not end payments</div>
+              {/* #482: absent on agreements signed before the clause existed */}
+              {existing.initials_in_season && (
+                <div><span className="font-semibold text-gray-800">{existing.initials_in_season}</span> — {Math.round(IN_SEASON_DISCOUNT * 100)}% off during HS / college / pro season months</div>
+              )}
             </div>
           </div>
 
@@ -441,6 +447,12 @@ export default function NbpPlusAgreementPage({ userId, userRole, athleteId, onSi
             </Initials>
             <Initials label="Initials — stopping early" value={initEarlyStop} onChange={setInitEarlyStop}>
               <span className="font-medium">4. Stopping Training Early.</span> I understand stopping early does not end my payments.
+            </Initials>
+            <Initials label="Initials — in-season rate" value={initInSeason} onChange={setInitInSeason}>
+              <span className="font-medium">4a. In-Season Rate.</span> During the months I am playing a high school, college or professional season, my training price is reduced by {Math.round(IN_SEASON_DISCOUNT * 100)}% to reflect reduced in-season training time. I will let NBP know when my season starts and ends.
+              {pricing && paymentOption === 'monthly' && (
+                <span className="block text-xs text-gray-500 mt-1">In-season month: {fmtUsd(Math.round(pricing.monthly * (1 - IN_SEASON_DISCOUNT)))} instead of {fmtUsd(pricing.monthly)} (before tax).</span>
+              )}
             </Initials>
           </div>
 

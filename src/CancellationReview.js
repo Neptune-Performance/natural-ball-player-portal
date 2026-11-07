@@ -28,7 +28,7 @@ import { supabase } from './supabaseClient';
 import { Loader2, HeartPulse, Undo2, AlertTriangle, RefreshCw } from 'lucide-react';
 import { formatUserError } from './errorMessage';
 import { applySessionUsage, USAGE_OUTCOME } from './sessionUsage';
-import { CANCEL_REASON_ATHLETE, CANCEL_REASON_SICK, isSickCancel, cancelDecisionLabel } from './cancelReasons';
+import { CANCEL_REASON_ATHLETE, CANCEL_REASON_SICK, CANCEL_REASON_EARLY, isSickCancel, isFreeCancel, cancelDecisionLabel } from './cancelReasons';
 
 const WINDOW_OPTIONS = [
   { days: 30, label: 'Last 30 days' },
@@ -39,6 +39,7 @@ const WINDOW_OPTIONS = [
 const FILTERS = [
   { key: 'review', label: 'Needs a decision' },
   { key: 'sick', label: 'Marked sick' },
+  { key: 'early', label: "5+ days' notice" },
   { key: 'all', label: 'All' },
 ];
 
@@ -213,7 +214,9 @@ export default function CancellationReview({ userId, userRole }) {
 
   const visible = rows.filter(r => {
     if (filter === 'sick' && !isSickCancel(r.cancel_reason)) return false;
-    if (filter === 'review' && isSickCancel(r.cancel_reason)) return false;
+    if (filter === 'early' && r.cancel_reason !== CANCEL_REASON_EARLY) return false;
+    // #477: a 5+ days' notice cancel is free by rule, so it never needs a decision.
+    if (filter === 'review' && isFreeCancel(r.cancel_reason)) return false;
     if (!search.trim()) return true;
     const q = search.trim().toLowerCase();
     return (r.users?.full_name || '').toLowerCase().includes(q)
@@ -225,7 +228,8 @@ export default function CancellationReview({ userId, userRole }) {
     <div className="space-y-4">
       <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm text-gray-700">
         <p>
-          Cancelling a session uses it up. Marking one <span className="font-medium">sick / injured</span> puts the session
+          Cancelling a session uses it up, unless the athlete cancelled it themselves with {"5+ days'"} notice — those are free
+          and never need a decision. Marking one <span className="font-medium">sick / injured</span> puts the session
           back into the athlete's package. This is the only place that decision is made — athletes cannot make it for themselves.
         </p>
         <p className="text-xs text-gray-600 mt-2">
@@ -305,6 +309,7 @@ export default function CancellationReview({ userId, userRole }) {
         <div className="bg-white border border-gray-200 rounded-lg divide-y divide-gray-100">
           {visible.map(r => {
             const sick = isSickCancel(r.cancel_reason);
+            const free = isFreeCancel(r.cancel_reason);
             const deducted = !!usageByRes[r.id];
             const busy = busyId === r.id;
             return (
@@ -324,7 +329,7 @@ export default function CancellationReview({ userId, userRole }) {
                   </div>
                   <div className="flex flex-wrap items-center gap-2 mt-2">
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${
-                      sick ? 'bg-green-50 text-green-700 border-green-200' : 'bg-gray-50 text-gray-600 border-gray-200'
+                      free ? 'bg-green-50 text-green-700 border-green-200' : 'bg-gray-50 text-gray-600 border-gray-200'
                     }`}>
                       {cancelDecisionLabel(r.cancel_reason)}
                     </span>
@@ -356,8 +361,8 @@ export default function CancellationReview({ userId, userRole }) {
                   </button>
                   <button
                     onClick={() => decide(r, false)}
-                    disabled={busy || (!sick && deducted)}
-                    title={sick ? 'Undo — put this back to counting against the athlete' : 'Deduct the session for this cancellation'}
+                    disabled={busy || (!free && deducted)}
+                    title={free ? 'Undo — put this back to counting against the athlete' : 'Deduct the session for this cancellation'}
                     className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-gray-300 text-gray-700 hover:bg-gray-50 transition disabled:opacity-40 disabled:hover:bg-transparent"
                   >
                     {busy ? <Loader2 size={12} className="animate-spin" /> : <Undo2 size={12} />}

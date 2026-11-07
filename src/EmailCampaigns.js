@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase, supabaseUrl, supabaseAnonKey } from './supabaseClient';
 import { Mail, Send, History, LayoutTemplate, Image as ImageIcon, ShieldAlert, ChevronLeft, ChevronRight, ChevronDown, Check, RefreshCw } from 'lucide-react';
 import ReactQuill from 'react-quill';
@@ -6,6 +6,7 @@ import 'react-quill/dist/quill.snow.css';
 import DOMPurify from 'dompurify';
 import { formatUserError } from './errorMessage';
 import { readAllPages } from './readAllPages';
+import EmailImageLibrary, { EmailImagePicker } from './EmailImageLibrary';
 
 /*
  * Issue #281 — Email Campaigns, Phase 1 of 3. Mirrors EZFacility's Email
@@ -230,15 +231,16 @@ const athleteStatusList = (value) => {
 const EMPTY_FILTERS = { teamIds: [], athleteStatus: '', staffStatus: '', signedUpAfter: '', signedUpBefore: '' };
 
 // Rich-text toolbar kept to what email clients actually render.
-const QUILL_MODULES = {
-  toolbar: [
-    [{ header: [false, 2, 3] }],
-    ['bold', 'italic', 'underline'],
-    [{ list: 'ordered' }, { list: 'bullet' }],
-    ['link'],
-    ['clean'],
-  ],
-};
+// #480: 'image' opens the Email Image Library picker (handler wired in the
+// component) instead of Quill's default, which would inline a base64 blob
+// most mail clients strip.
+const QUILL_TOOLBAR = [
+  [{ header: [false, 2, 3] }],
+  ['bold', 'italic', 'underline'],
+  [{ list: 'ordered' }, { list: 'bullet' }],
+  ['link', 'image'],
+  ['clean'],
+];
 
 export default function EmailCampaigns({ userId, userRole, section, onSectionChange }) {
   // #390 — Cordell asked for admins AND coaches to be able to open Campaign
@@ -265,6 +267,21 @@ export default function EmailCampaigns({ userId, userRole, section, onSectionCha
   const [returnEmail, setReturnEmail] = useState('');
   const [subject, setSubject] = useState('');
   const [bodyHtml, setBodyHtml] = useState('');
+  const quillRef = useRef(null);
+  const [imagePickerOpen, setImagePickerOpen] = useState(false);
+  const quillModules = useMemo(() => ({
+    toolbar: { container: QUILL_TOOLBAR, handlers: { image: () => setImagePickerOpen(true) } },
+  }), []);
+  const insertImage = (img) => {
+    setImagePickerOpen(false);
+    const editor = quillRef.current?.getEditor();
+    if (!editor) return;
+    const range = editor.getSelection(true);
+    const at = range ? range.index : editor.getLength();
+    editor.insertEmbed(at, 'image', img.public_url, 'user');
+    editor.insertText(at + 1, '\n', 'user');
+    editor.setSelection(at + 2, 0, 'silent');
+  };
   const [templates, setTemplates] = useState([]);
   const [templatesUnavailable, setTemplatesUnavailable] = useState(false);
   const [templateCategory, setTemplateCategory] = useState('');
@@ -985,7 +1002,8 @@ export default function EmailCampaigns({ userId, userRole, section, onSectionCha
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Message</label>
             <div className="bg-white border border-gray-300 rounded-lg overflow-hidden">
-              <ReactQuill theme="snow" value={bodyHtml} onChange={setBodyHtml} modules={QUILL_MODULES} />
+              <ReactQuill ref={quillRef} theme="snow" value={bodyHtml} onChange={setBodyHtml} modules={quillModules} />
+              {imagePickerOpen && <EmailImagePicker userId={userId} onPick={insertImage} onClose={() => setImagePickerOpen(false)} />}
             </div>
           </div>
         </div>
@@ -1602,7 +1620,7 @@ export default function EmailCampaigns({ userId, userRole, section, onSectionCha
           {effectiveSection === 'send' && renderWizard()}
           {effectiveSection === 'history' && renderHistory()}
           {effectiveSection === 'templates' && renderPlaceholder('Email Template Library', 'Create, edit and organize reusable templates by category — they feed the picker in Compose Message. Arrives in Phase 3.')}
-          {effectiveSection === 'images' && renderPlaceholder('Email Image Library', 'Upload images to use inside campaign emails. Arrives in Phase 3.')}
+          {effectiveSection === 'images' && <EmailImageLibrary userId={userId} />}
           {effectiveSection === 'failed' && renderFailed()}
         </div>
       </div>

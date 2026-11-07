@@ -511,9 +511,18 @@ function LoginPage({ onLogin }) {
   const handleForgotPassword = async (e) => {
     e.preventDefault();
     setForgotLoading(true);
-    const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail, {
-      redirectTo: `${window.location.origin}/?type=recovery`,
-    });
+    const email = forgotEmail.trim();
+    // #481: Supabase sends nothing (and says nothing) for an email with no
+    // login. Families often type the parent email on file instead of the
+    // athlete's login, so parent-password-reset mails that parent a link per
+    // linked athlete. Best effort: it always answers ok and never blocks.
+    const [{ error }] = await Promise.all([
+      supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/?type=recovery`,
+      }),
+      supabase.functions.invoke('parent-password-reset', { body: { email } })
+        .catch((err) => console.error('parent-password-reset:', err)),
+    ]);
     setForgotLoading(false);
     if (error) {
       alert('Error: ' + formatUserError(error));
@@ -705,7 +714,8 @@ function LoginPage({ onLogin }) {
             <div className="text-center space-y-4">
               <Mail size={40} className="mx-auto text-blue-500" />
               <h2 className="text-lg font-semibold text-gray-900">Check Your Email</h2>
-              <p className="text-sm text-gray-600">We sent a password reset link to <strong>{forgotEmail}</strong>. Click the link in the email to reset your password.</p>
+              <p className="text-sm text-gray-600">If <strong>{forgotEmail}</strong> is an account email, or the parent email on file for an athlete, a reset link is on its way. Click the link in the email to reset the password.</p>
+              <p className="text-xs text-gray-500">Nothing after a few minutes? Check spam, then try the athlete's own login email.</p>
               <button
                 onClick={() => { setShowForgot(false); setForgotSent(false); setForgotEmail(''); }}
                 className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 transition"
@@ -724,7 +734,7 @@ function LoginPage({ onLogin }) {
                 <span>Back to Sign In</span>
               </button>
               <h2 className="text-lg font-semibold text-gray-900">Reset Password</h2>
-              <p className="text-sm text-gray-600">Enter your email address and we'll send you a link to reset your password.</p>
+              <p className="text-sm text-gray-600">Enter the athlete's login email, or the parent email on file, and we'll send a link to reset the password.</p>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
                 <input
