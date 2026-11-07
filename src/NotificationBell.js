@@ -300,7 +300,7 @@ export default function NotificationBell({ currentPortal, mainCounts, workCounts
                 the athlete's Physical Therapy tab, where the existing RLS and
                 the existing screen decide what they see. Clicking dismisses
                 and navigates, as with #408; the X dismisses in place. */}
-            {/* #462: today's lift / session check-in, until every item is
+            {/* #462 / #484: today's lift / practice / game / session check-in, until every item is
                 answered and every "doing" item is marked completed. */}
             {checkinOpenCount > 0 && onOpenCheckin && (
               <button
@@ -311,7 +311,7 @@ export default function NotificationBell({ currentPortal, mainCounts, workCounts
                   <div className="mt-0.5"><Dumbbell size={16} className="text-blue-600" /></div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-gray-900 font-medium">Today's check-in</p>
-                    <p className="text-xs text-gray-600 mt-0.5">{checkinOpenCount} lift or session{checkinOpenCount === 1 ? '' : 's'} today to check in or mark completed</p>
+                    <p className="text-xs text-gray-600 mt-0.5">{checkinOpenCount} item{checkinOpenCount === 1 ? '' : 's'} on today's schedule (lifts, practices, games, sessions) to check in or mark completed</p>
                   </div>
                   {currentPortal !== 'main' && <PortalTag kind="main" />}
                 </div>

@@ -27,7 +27,8 @@ import { useModalTracking, trackAction } from './usage';
 import { FACILITY_FINE_ENABLED, FACILITY_FINE_LABEL } from './facilityFineDocument';
 import { MECHANICS_AREAS, mechanicsArea, mechanicsAreaLabel, mechanicsDeficiencyInfo } from './mechanicsDeficiencies';
 import RecruitingBoard from './RecruitingBoard';
-import { fetchCompletionRate, COMPLETION_WINDOW_DAYS } from './athleteCheckins';
+import { fetchCompletionRate, COMPLETION_WINDOW_DAYS, CHECKIN_CATEGORIES } from './athleteCheckins';
+import CheckinCatchUpModal from './CheckinCatchUp';
 import { fetchWhoopStatus, WHOOP_STALE_DAYS } from './whoopStatus';
 import PlayerCard from './PlayerCard'; // #474
 
@@ -553,12 +554,16 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
   // #462: the athlete's own check-in completion over the last 30 days,
   // shown next to their age. null = nothing scheduled (or not a player).
   const [completionRate, setCompletionRate] = useState(null);
+  // #484: the athlete clicks their own pill to open the catch-up list; the
+  // rate refetches when it closes.
+  const [showCatchUp, setShowCatchUp] = useState(false);
+  const [completionTick, setCompletionTick] = useState(0);
   useEffect(() => {
     if (!userId || userData?.role !== 'player') { setCompletionRate(null); return; }
     let cancelled = false;
     fetchCompletionRate(userId).then(r => { if (!cancelled) setCompletionRate(r); });
     return () => { cancelled = true; };
-  }, [userId, userData?.role]);
+  }, [userId, userData?.role, completionTick]);
   // #473: WHOOP heartbeat next to the age. Green = linked and syncing; red =
   // not linked or no recent data, and clicking it opens the WHOOP section to
   // connect. null = not a player or the status read failed (no icon).
@@ -2315,14 +2320,18 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
                       WHOOP
                     </button>
                   )}
-                  {completionRate && (
-                    <span
-                      className={`ml-2 align-middle inline-block text-sm font-semibold px-2 py-0.5 rounded-full ${completionRate.pct >= 80 ? 'bg-green-100 text-green-700' : completionRate.pct >= 50 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`}
-                      title={`${completionRate.completed} of ${completionRate.scheduled} lifts and sessions marked completed in the last ${COMPLETION_WINDOW_DAYS} days`}
-                    >
-                      {completionRate.pct}% completed
-                    </span>
-                  )}
+                  {completionRate && (() => {
+                    const own = loggedInUserId === userId;
+                    const breakdown = Object.keys(CHECKIN_CATEGORIES)
+                      .filter(t => completionRate.byType?.[t])
+                      .map(t => `${CHECKIN_CATEGORIES[t].plural}: ${completionRate.byType[t].completed}/${completionRate.byType[t].scheduled}`)
+                      .join(' · ');
+                    const title = `${completionRate.completed} of ${completionRate.scheduled} lifts, practices, games and sessions marked completed in the last ${COMPLETION_WINDOW_DAYS} days${breakdown ? ` (${breakdown})` : ''}${own ? '. Click to catch up on past days.' : ''}`;
+                    const cls = `ml-2 align-middle inline-block text-sm font-semibold px-2 py-0.5 rounded-full ${completionRate.pct >= 80 ? 'bg-green-100 text-green-700' : completionRate.pct >= 50 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`;
+                    return own
+                      ? <button type="button" onClick={() => setShowCatchUp(true)} className={`${cls} hover:ring-2 hover:ring-offset-1 hover:ring-gray-300`} title={title}>{completionRate.pct}% completed</button>
+                      : <span className={cls} title={title}>{completionRate.pct}% completed</span>;
+                  })()}
                 </h3>
               )}
               <p className="text-gray-600 capitalize mt-1">{userData.role}</p>
@@ -5346,6 +5355,13 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
             </div>
           </div>
         </div>
+      )}
+
+      {showCatchUp && (
+        <CheckinCatchUpModal
+          userId={userId}
+          onClose={() => { setShowCatchUp(false); setCompletionTick(t => t + 1); }}
+        />
       )}
 
       {showPackages && (
