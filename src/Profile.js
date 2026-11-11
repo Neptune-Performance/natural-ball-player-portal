@@ -31,6 +31,7 @@ import { fetchCompletionRate, COMPLETION_WINDOW_DAYS, CHECKIN_CATEGORIES } from 
 import CheckinCatchUpModal from './CheckinCatchUp';
 import { fetchWhoopStatus, WHOOP_STALE_DAYS } from './whoopStatus';
 import PlayerCard from './PlayerCard'; // #474
+import ReportsTab from './ReportsTab';
 
 const EQUIPMENT_FIELDS = [
   { key: 'shirt', label: 'Shirt' },
@@ -78,6 +79,7 @@ const PROFILE_TABS = [
   // and into RECORDS_SUB_TABS. Their gates moved with them, unchanged — see the
   // note on each entry there.
   { key: 'records', label: 'Records' },
+  { key: 'reports', label: 'Reports', viewedRoles: ['player'] },
   { key: 'communication', label: 'Communication', roles: ['admin', 'coach'] },
 ];
 
@@ -100,7 +102,7 @@ const PROFILE_TABS = [
 // "Coming Soon" over nothing. Both go, together.
 const PROFILE_TABS_WITH_CONTENT = [
   'general', 'card', 'athletes', 'schedule', 'technology', 'stats', 'health',
-  'recruitment', 'records', 'communication',
+  'recruitment', 'records', 'communication', 'reports',
 ];
 
 // #226: whole-years age from a 'YYYY-MM-DD' DOB, or null if absent/invalid.
@@ -4814,6 +4816,10 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
 
           {activeProfileTab === 'health' && activeHealthSubTab === 'marek' && (
             <MarekTab playerId={userId} canEdit={canEditProfile} dateOfBirth={userData?.date_of_birth} />
+          )}
+
+          {activeProfileTab === 'reports' && userData?.role === 'player' && (
+            <ReportsTab key={userId} userId={userId} />
           )}
 
           {activeProfileTab === 'general' && (
