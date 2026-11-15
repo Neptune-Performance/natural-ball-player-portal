@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from './supabaseClient';
 import { fetchUserDirectory, readDirectory } from './userDirectory';
-import { Calendar as CalendarIcon, MessageSquare, ChevronLeft, ChevronRight, Plus, X, Users, User, UserCheck, Dumbbell, Utensils, Trash2, Edit2, Building, MapPin, AlignLeft, Repeat, Clock, Check, ClipboardList, Apple, Search, ExternalLink, CheckSquare, History, Copy, DollarSign, AlertTriangle, UserCog, LayoutGrid } from 'lucide-react';
+import { Calendar as CalendarIcon, MessageSquare, ChevronLeft, ChevronRight, Plus, X, Users, User, UserCheck, Dumbbell, Utensils, Trash2, Edit2, Building, MapPin, AlignLeft, Repeat, Clock, Check, ClipboardList, Apple, Search, ExternalLink, CheckSquare, History, Copy, DollarSign, AlertTriangle, UserCog, LayoutGrid, Maximize2 } from 'lucide-react';
 import { fmtLocalDate, expandRecurringEvents, monthWeekRange, buildSlotExceptionMap, getSlotDateException, collectMovedSlots, upsertFacilityException, deleteFacilityOccurrence, deleteFacilitySeries, deleteFacilityFuture, countFacilitySeriesImpact, countSignupsForEvents, facilitySeriesDeleteWarning, DELETE_CANCELLED, placeProgramDays } from './scheduleUtils';
 import CalendarContextMenu from './CalendarContextMenu';
 import RecurrenceDecisionModal from './RecurrenceDecisionModal';
@@ -17,6 +17,7 @@ import { allowancesForPurchases, sessionClass, weekRangeForDate, capWarningMessa
 import { CreateUserModal } from './AdminSettings';
 import { familyKey, familyLabel, sameFamily } from './productFamily';
 import { applySessionUsage } from './sessionUsage';
+import WorkoutTvView from './WorkoutTvView';
 import { canSelfCancel, cancelOwnReservation, sessionStart, SELF_CANCEL_RULE_TEXT, SELF_CANCEL_CLOSED_TEXT } from './athleteCancel';
 // #277: per-occurrence RSVP (Going / Not going / Maybe) + coach roster & nudge.
 import { EventRsvpSection } from './EventRsvp';
@@ -6130,6 +6131,7 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole, userId }) {
   const [logs, setLogs] = useState({});
   const [lastLogs, setLastLogs] = useState({});
   const [historyFor, setHistoryFor] = useState(null); // #461: exercise name
+  const [tvOpen, setTvOpen] = useState(false); // #493: full-screen view for the weight-room TV
 
   useEffect(() => {
     const load = async () => {
@@ -6200,6 +6202,7 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole, userId }) {
     const onEsc = (e) => {
       if (e.key !== 'Escape') return;
       if (deleting) return;
+      if (tvOpen) { setTvOpen(false); return; }
       if (confirmDelete) { setConfirmDelete(false); return; }
       // A weight box being typed in saves on blur; the first press commits it.
       if (document.activeElement?.tagName === 'INPUT') { document.activeElement.blur(); return; }
@@ -6207,7 +6210,7 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole, userId }) {
     };
     window.addEventListener('keydown', onEsc);
     return () => window.removeEventListener('keydown', onEsc);
-  }, [confirmDelete, deleting, onClose]);
+  }, [confirmDelete, deleting, onClose, tvOpen]);
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
@@ -6233,9 +6236,22 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole, userId }) {
               </div>
             </div>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 flex-shrink-0">
-            <X size={22} />
-          </button>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {/* #493: the whole workout on one screen, for casting to the TV. */}
+            {!loading && exercises.length > 0 && (
+              <button
+                onClick={() => setTvOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                title="Show the whole workout full screen"
+              >
+                <Maximize2 size={16} />
+                <span className="hidden sm:inline">Full screen</span>
+              </button>
+            )}
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+              <X size={22} />
+            </button>
+          </div>
         </div>
 
         <div className="p-5 overflow-y-auto flex-1 min-h-0">
@@ -6423,6 +6439,23 @@ function WorkoutDetailModal({ event, onClose, onDelete, userRole, userId }) {
       </div>
       {historyFor && logPlayerId && (
         <ExerciseHistoryModal playerId={logPlayerId} exerciseName={historyFor} onClose={() => setHistoryFor(null)} />
+      )}
+      {tvOpen && (
+        <WorkoutTvView
+          title={event.title || 'Workout'}
+          subtitle={[
+            new Date(event.event_date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }),
+            program?.name ? `${program.name}${trainingDay?.day_number ? ` — Day ${trainingDay.day_number}` : ''}` : null,
+          ].filter(Boolean).join(' · ')}
+          notes={generalNotes}
+          groups={Object.entries(groupedByCategory).map(([cat, exs]) => ({
+            key: cat,
+            label: CATEGORY_LABEL[cat] || cat.charAt(0).toUpperCase() + cat.slice(1),
+            bar: CATEGORY_BAR[cat] || 'bg-gray-500',
+            exercises: exs,
+          }))}
+          onClose={() => setTvOpen(false)}
+        />
       )}
     </div>
   );

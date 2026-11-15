@@ -1,10 +1,11 @@
-// #470: auto-remove unbooked coach sessions 6 hours before they start.
+// #470 / #489: auto-remove unbooked coach sessions, and unbooked Assessment /
+// NBP+ hour blocks on the facility calendar, 5 hours before they start.
 //
 // Vercel Cron hits this hourly (vercel.json: "5 * * * *") with
 // `Authorization: Bearer $CRON_SECRET`. It does no work itself: it calls the
 // `slot-autoclean` Supabase edge function with the service-role key (same
 // shape as weekly-reminders), which expands every training_slots occurrence
-// starting in the next 6 hours and tombstones the ones nobody has booked.
+// starting in the next 5 hours and tombstones the ones nobody has booked.
 //
 // Also callable by hand with a staff Supabase JWT, passing `?dry_run=1`,
 // `?limit=`, `?hours=` and `?coach_id=` straight through:

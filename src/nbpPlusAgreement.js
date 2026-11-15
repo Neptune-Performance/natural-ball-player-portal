@@ -52,6 +52,16 @@ export function agreementPrice(termMonths, trainingType, paymentOption) {
     : { price: p.total, monthly: p.monthly };
 }
 
+// #492: the price when the athlete typed a custom per-month amount agreed with
+// NBP. Same shape as agreementPrice; paid-in-full keeps the 10% discount.
+export function customAgreementPrice(termMonths, customMonthlyCents, paymentOption) {
+  if (!termMonths || !customMonthlyCents || !paymentOption) return null;
+  const total = customMonthlyCents * termMonths;
+  return paymentOption === 'upfront'
+    ? { price: Math.round(total * 0.9), monthly: null }
+    : { price: total, monthly: customMonthlyCents };
+}
+
 export const fmtUsd = (cents) => (cents == null ? '—'
   : (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' }));
 

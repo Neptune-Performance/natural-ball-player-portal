@@ -4,7 +4,7 @@ import { CheckCircle, AlertTriangle, FileSignature, Clock } from 'lucide-react';
 import { formatUserError } from './errorMessage';
 import {
   TERM_OPTIONS, TRAINING_TYPE_OPTIONS, PAYMENT_OPTIONS,
-  agreementPricing, agreementPrice, fmtUsd, termEndDate, isUnder18, IN_SEASON_DISCOUNT,
+  agreementPricing, agreementPrice, customAgreementPrice, fmtUsd, termEndDate, isUnder18, IN_SEASON_DISCOUNT,
   fetchAgreementDoc,
 } from './nbpPlusAgreement';
 
@@ -130,6 +130,9 @@ export default function NbpPlusAgreementPage({ userId, userRole, athleteId, onSi
   const [trainingType, setTrainingType] = useState(null);
   const [paymentOption, setPaymentOption] = useState(null);
   const [startDate, setStartDate] = useState(today());
+  // #492: a per-month price agreed with NBP that is not on the pricing table.
+  // Blank = table price. NBP signs off on it by countersigning.
+  const [customMonthly, setCustomMonthly] = useState('');
 
   // Initials
   const [initPayment, setInitPayment] = useState('');
@@ -151,7 +154,16 @@ export default function NbpPlusAgreementPage({ userId, userRole, athleteId, onSi
 
   const endDate = useMemo(() => termEndDate(startDate, termMonths), [startDate, termMonths]);
   const pricing = useMemo(() => agreementPricing(termMonths, trainingType), [termMonths, trainingType]);
-  const chosen = useMemo(() => agreementPrice(termMonths, trainingType, paymentOption), [termMonths, trainingType, paymentOption]);
+  const customMonthlyCents = useMemo(() => {
+    const n = Math.round(parseFloat(String(customMonthly).replace(/[$,\s]/g, '')) * 100);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [customMonthly]);
+  const chosen = useMemo(
+    () => (customMonthlyCents
+      ? customAgreementPrice(termMonths, customMonthlyCents, paymentOption)
+      : agreementPrice(termMonths, trainingType, paymentOption)),
+    [termMonths, trainingType, paymentOption, customMonthlyCents],
+  );
   const minor = isUnder18(dob);
 
   const load = async () => {
@@ -201,6 +213,7 @@ export default function NbpPlusAgreementPage({ userId, userRole, athleteId, onSi
     if (!trainingType) return 'Choose a training type — in-house or remote.';
     if (!paymentOption) return 'Choose a payment option.';
     if (!startDate) return 'Enter a start date.';
+    if (String(customMonthly).trim() && !customMonthlyCents) return 'The custom price per month is not a valid amount. Clear it to use the standard price.';
     if (!chosen) return 'Could not work out the price for that term and training type.';
     if (!initPayment.trim() || !initRequirements.trim() || !initEarlyStop.trim() || !initInSeason.trim()) return 'Add your initials to all four boxes.';
     if (!athleteSig.trim()) return 'Type the athlete\'s full legal name to sign.';
@@ -236,6 +249,7 @@ export default function NbpPlusAgreementPage({ userId, userRole, athleteId, onSi
         end_date: endDate,
         price_cents: chosen.price,
         monthly_cents: chosen.monthly,
+        custom_monthly_cents: customMonthlyCents,
         initials_payment: initPayment.trim(),
         initials_requirements: initRequirements.trim(),
         initials_early_stop: initEarlyStop.trim(),
@@ -352,6 +366,12 @@ export default function NbpPlusAgreementPage({ userId, userRole, athleteId, onSi
               <Readout label="Start date" value={fmtDate(existing.start_date)} />
               <Readout label="End date" value={fmtDate(existing.end_date)} />
               <Readout label="Price (pre-tax)" value={`${fmtUsd(existing.price_cents)}${existing.monthly_cents ? ` · ${fmtUsd(existing.monthly_cents)} / month` : ''}`} />
+              {existing.custom_monthly_cents && (
+                <Readout
+                  label="Custom price per month"
+                  value={`${fmtUsd(existing.custom_monthly_cents)} · ${existing.nbp_signed_at ? 'approved by NBP' : 'awaiting NBP sign-off'}`}
+                />
+              )}
             </div>
             <div className={`mt-4 grid gap-3 text-xs text-gray-600 ${existing.initials_in_season ? 'sm:grid-cols-4' : 'sm:grid-cols-3'}`}>
               <div><span className="font-semibold text-gray-800">{existing.initials_payment}</span> — committing to every payment for the term</div>
@@ -377,6 +397,12 @@ export default function NbpPlusAgreementPage({ userId, userRole, athleteId, onSi
                 <div className="flex items-center gap-2 text-sm font-medium text-gray-800 mb-3">
                   <FileSignature size={16} className="text-blue-600" /> Countersign for The Natural Ballplayer
                 </div>
+                {existing.custom_monthly_cents && (
+                  <p className="mb-3 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    This agreement uses a custom price of {fmtUsd(existing.custom_monthly_cents)} / month typed by the athlete.
+                    Countersigning approves that price.
+                  </p>
+                )}
                 <div className="grid sm:grid-cols-2 gap-3">
                   <Field label="Signature (type full legal name)">
                     <input className={inp} value={nbpSig} onChange={(e) => setNbpSig(e.target.value)} />
@@ -419,6 +445,24 @@ export default function NbpPlusAgreementPage({ userId, userRole, athleteId, onSi
               <Field label="Term *"><RadioRow name="term" value={termMonths} options={TERM_OPTIONS} onChange={setTermMonths} /></Field>
               <Field label="Training type *"><RadioRow name="ttype" value={trainingType} options={TRAINING_TYPE_OPTIONS} onChange={setTrainingType} /></Field>
             </div>
+            {/* #492 */}
+            <Field label="Custom price per month (only if agreed with NBP)">
+              <div className="flex items-center gap-2 max-w-xs">
+                <span className="text-sm text-gray-500">$</span>
+                <input
+                  className={inp}
+                  type="text"
+                  inputMode="decimal"
+                  value={customMonthly}
+                  onChange={(e) => setCustomMonthly(e.target.value)}
+                  placeholder="Leave blank for the standard price"
+                />
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                Fill this in only if you and NBP agreed a different monthly price for your {termMonths ? `${termMonths}-month` : '6 or 12 month'} term.
+                NBP is notified and signs off on it when they countersign.
+              </p>
+            </Field>
             <Field label="Payment option *"><RadioRow name="pay" value={paymentOption} options={PAYMENT_OPTIONS} onChange={setPaymentOption} /></Field>
             <div className="grid sm:grid-cols-3 gap-4">
               <Field label="Start date *"><input className={inp} type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></Field>
@@ -427,6 +471,11 @@ export default function NbpPlusAgreementPage({ userId, userRole, athleteId, onSi
                 <input className={`${inp} bg-gray-50`} readOnly value={chosen ? `${fmtUsd(chosen.price)}${chosen.monthly ? ` (${fmtUsd(chosen.monthly)} / mo)` : ''}` : ''} placeholder="Pick term, type & payment" />
               </Field>
             </div>
+            {customMonthlyCents && (
+              <p className="text-xs text-amber-700">
+                Custom price: {fmtUsd(customMonthlyCents)} / month before tax, replacing the standard price below. Pending NBP sign-off.
+              </p>
+            )}
             {pricing && (
               <p className="text-xs text-gray-500">
                 {termMonths}-month {TRAINING_TYPE_OPTIONS.find((o) => o.value === trainingType)?.label.toLowerCase()}: {fmtUsd(pricing.total)} total ·{' '}

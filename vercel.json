@@ -4,14 +4,16 @@
     { "path": "/api/weekly-reminders", "schedule": "0 15 * * 1" },
     { "path": "/api/whoop-sync", "schedule": "0 */2 * * *" },
     { "path": "/api/coach-task-digest", "schedule": "0 14,15 * * *" },
-    { "path": "/api/slot-autoclean", "schedule": "5 * * * *" }
+    { "path": "/api/slot-autoclean", "schedule": "5 * * * *" },
+    { "path": "/api/session-autodeduct", "schedule": "20 * * * *" }
   ],
   "functions": {
     "api/trackman-sync.js": { "maxDuration": 60 },
     "api/weekly-reminders.js": { "maxDuration": 60 },
     "api/whoop-sync.js": { "maxDuration": 300 },
     "api/coach-task-digest.js": { "maxDuration": 60 },
-    "api/slot-autoclean.js": { "maxDuration": 60 }
+    "api/slot-autoclean.js": { "maxDuration": 60 },
+    "api/session-autodeduct.js": { "maxDuration": 60 }
   },
   "redirects": [
     {

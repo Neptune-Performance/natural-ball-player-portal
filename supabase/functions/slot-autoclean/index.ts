@@ -1,7 +1,10 @@
-// #470: auto-remove unbooked coach sessions 6 hours before they start.
+// #470: auto-remove unbooked coach sessions before they start.
 //
 // Cordell: "remove those sessions 6 hours before their start time if no one
 // has booked them so they are not hanging onto schedule for a late signup."
+// #489: the window is now 5 hours, and the same run also hides unbooked
+// Assessment / NBP+ hour blocks on the facility calendar — see
+// cleanFacilityEvents below. Everything in this header about "6h" reads 5h.
 //
 // Called hourly by api/slot-autoclean.js (Vercel cron) with the service-role
 // key. Keeps verify_jwt=true like weekly-reminders: the service-role key IS a
@@ -54,11 +57,11 @@
 
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
-import { trainingSlotOccurrences } from "../_shared/availability.ts";
+import { facilityEventOccurrences, trainingSlotOccurrences } from "../_shared/availability.ts";
 
 const FACILITY_TZ = Deno.env.get("FACILITY_TIMEZONE") || "America/Los_Angeles";
-const DEFAULT_HOURS = 6;
-const REASON = "unbooked_6h";
+const DEFAULT_HOURS = 5;
+const REASON = "unbooked_5h";
 const PAGE = 1000;
 
 type Slot = {
@@ -173,6 +176,224 @@ function isBooked(map: Map<string, number>, c: Candidate): boolean {
   // repoint that didn't happen — count it rather than strand it.
   if (c.kind === "moved" && (map.get(`${c.masterId}_${c.seriesDate}`) || 0) > 0) return true;
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// #489: facility calendar hour blocks.
+//
+// Cordell's "Assessment" and "NBP+ … Hour Blocks" rows are facility_events,
+// not training_slots, so the #470 pass never saw them. An occurrence is
+// removed when ALL of this holds:
+//   - it belongs to a RECURRING series that is a public booking of one of
+//     FACILITY_BOOKING_TYPES (the bookable hour-block templates). One-off
+//     events are never touched: "Roland Johnston Assessment" is a real
+//     appointment with no athlete attached, and deleting a standalone row
+//     cannot be undone;
+//   - it starts in (now, now + hours] facility time;
+//   - nobody is on it: no athlete_id / athlete_ids / team_ids on the row, no
+//     event_signups, no pending_payment / confirmed public_bookings (the same
+//     three sources as the #431 booked badge);
+//   - a per-occurrence edit that RENAMED it (e.g. "Assessment Octavian") is
+//     left alone — staff put a name on that hour.
+// Removal is the calendar's "Delete → this one" (deleteFacilityOccurrence in
+// src/scheduleUtils.js): a tombstone child row, or the existing child flipped
+// to is_exception = true, stamped with auto_removed_at / auto_removed_reason
+// (migration 20261114_facility_events_auto_removed.sql has the restore SQL).
+// ---------------------------------------------------------------------------
+const FACILITY_BOOKING_TYPES = [
+  "Assessment",
+  "NBP+ Hitting Session",
+  "NBP+ Pitching/Throwing Session",
+  "NBP+ Fielding Session",
+];
+// Same list as FACILITY_EXCEPTION_DROP_KEYS in src/scheduleUtils.js (minus
+// the client-only embeds): the child row copies everything else.
+const FACILITY_EXCEPTION_DROP_KEYS = ["id", "is_recurring", "recurrence_rule", "recurrence_index", "created_at", "updated_at"];
+const IN_CHUNK = 100;
+
+// deno-lint-ignore no-explicit-any
+type FacRow = Record<string, any>;
+type FacCandidate = {
+  master: FacRow;
+  child: FacRow | null;  // existing per-occurrence row, if this date has one
+  date: string;          // the date it actually happens on
+  seriesDate: string;    // the series date it stands for
+  startMs: number;
+};
+
+function facHasPeople(r: FacRow): boolean {
+  return !!r.athlete_id || (r.athlete_ids || []).length > 0 || (r.team_ids || []).length > 0;
+}
+
+// "eventId_date" keys that have a sign-up or a live public booking.
+async function facBookedKeys(service: SupabaseClient, ids: string[], dates: string[]) {
+  const keys = new Set<string>();
+  for (let i = 0; i < ids.length; i += IN_CHUNK) {
+    const chunk = ids.slice(i, i + IN_CHUNK);
+    const [su, pb] = await Promise.all([
+      service.from("event_signups").select("event_id, event_date").in("event_id", chunk).in("event_date", dates),
+      service.from("public_bookings").select("source_id, occurrence_date")
+        .eq("source_type", "facility_event").in("status", ["pending_payment", "confirmed"])
+        .in("source_id", chunk).in("occurrence_date", dates),
+    ]);
+    if (su.error) return { keys, error: `event_signups: ${su.error.message}` };
+    if (pb.error) return { keys, error: `public_bookings: ${pb.error.message}` };
+    for (const r of su.data || []) keys.add(`${r.event_id}_${r.event_date}`);
+    for (const r of pb.data || []) keys.add(`${r.source_id}_${r.occurrence_date}`);
+  }
+  return { keys, error: null as string | null };
+}
+
+function facIsBooked(keys: Set<string>, c: FacCandidate): boolean {
+  if (facHasPeople(c.child || c.master)) return true;
+  const ids = [c.master.id, c.child?.id].filter(Boolean);
+  const dates = [...new Set([c.date, c.seriesDate])];
+  return ids.some((id) => dates.some((d) => keys.has(`${id}_${d}`)));
+}
+
+async function cleanFacilityEvents(
+  service: SupabaseClient,
+  o: { nowMs: number; windowEndMs: number; today: string; lastDay: string; dates: string[]; dryRun: boolean; limit: number },
+): Promise<Record<string, unknown>> {
+  const { data: masters, error: mErr } = await service.from("facility_events").select("*")
+    .eq("is_recurring", true).is("recurrence_parent_id", null)
+    .eq("is_public", true).in("booking_type", FACILITY_BOOKING_TYPES)
+    .lte("event_date", o.lastDay).order("id");
+  if (mErr) return { ok: false, error: `facility_events masters query failed: ${mErr.message}` };
+  const masterById = new Map<string, FacRow>((masters || []).map((m: FacRow) => [m.id, m]));
+  const masterIds = [...masterById.keys()];
+
+  const dateList = o.dates.join(",");
+  const children: FacRow[] = [];
+  for (let i = 0; i < masterIds.length; i += IN_CHUNK) {
+    const { data, error } = await service.from("facility_events").select("*")
+      .in("recurrence_parent_id", masterIds.slice(i, i + IN_CHUNK))
+      .or(`original_date.in.(${dateList}),event_date.in.(${dateList})`);
+    if (error) return { ok: false, error: `facility_events exceptions query failed: ${error.message}` };
+    children.push(...(data || []));
+  }
+  // Same key as expandRecurringEvents: the series date a child stands in for.
+  const exceptionKeys = new Set(children.map((c) => `${c.recurrence_parent_id}_${c.original_date || c.event_date}`));
+
+  const rangeStart = new Date(`${o.today}T00:00:00`);
+  const rangeEnd = new Date(`${o.lastDay}T23:59:59`);
+  const candidates: FacCandidate[] = [];
+  let keptRenamed = 0;
+  for (const m of masters || []) {
+    if (!m.recurrence_rule) continue;
+    for (const date of facilityEventOccurrences(m, rangeStart, rangeEnd)) {
+      if (exceptionKeys.has(`${m.id}_${date}`)) continue; // hidden, or lives in a child row
+      candidates.push({ master: m, child: null, date, seriesDate: date, startMs: facilityStartMs(date, m.start_time) });
+    }
+  }
+  for (const c of children) {
+    if (c.is_exception) continue; // already hidden
+    if (!o.dates.includes(c.event_date)) continue;
+    const m = masterById.get(c.recurrence_parent_id);
+    if (!m) continue;
+    if ((c.title || "").trim() !== (m.title || "").trim()) { keptRenamed++; continue; }
+    candidates.push({
+      master: m, child: c, date: c.event_date, seriesDate: c.original_date || c.event_date,
+      startMs: facilityStartMs(c.event_date, c.start_time),
+    });
+  }
+
+  const inWindow = candidates.filter((c) => c.startMs > o.nowMs && c.startMs <= o.windowEndMs);
+  const ids = [...new Set(inWindow.flatMap((c) => [c.master.id, c.child?.id].filter(Boolean)))] as string[];
+  const booked = await facBookedKeys(service, ids, o.dates);
+  if (booked.error) return { ok: false, error: `facility booking check failed: ${booked.error}` };
+
+  let toRemove = inWindow.filter((c) => !facIsBooked(booked.keys, c)).sort((a, b) => a.startMs - b.startMs);
+  const keptBooked = inWindow.length - toRemove.length;
+  if (o.limit) toRemove = toRemove.slice(0, o.limit);
+
+  const describe = (c: FacCandidate) => ({
+    master_id: c.master.id,
+    child_id: c.child?.id || null,
+    title: (c.child || c.master).title,
+    booking_type: c.master.booking_type,
+    date: c.date,
+    start_time: ((c.child || c.master).start_time || "").slice(0, 5),
+    starts_in_min: Math.round((c.startMs - o.nowMs) / 60000),
+  });
+  const summary = {
+    ok: true,
+    series: masterIds.length,
+    occurrences_on_dates: candidates.length,
+    in_window: inWindow.length,
+    kept_booked: keptBooked,
+    kept_renamed: keptRenamed,
+  };
+  if (o.dryRun) return { ...summary, would_remove: toRemove.length, occurrences: toRemove.map(describe) };
+
+  const stampedAt = new Date().toISOString();
+  type Done = { c: FacCandidate; rowId: string; undo: "delete" | "unflip" };
+  const done: Done[] = [];
+  const failed: Array<Record<string, unknown>> = [];
+  let alreadyGone = 0;
+  for (const c of toRemove) {
+    if (c.child) {
+      const { data, error } = await service.from("facility_events")
+        .update({ is_exception: true, auto_removed_at: stampedAt, auto_removed_reason: REASON })
+        .eq("id", c.child.id).select("id");
+      if (error) { failed.push({ ...describe(c), error: error.message }); continue; }
+      if (!data || !data.length) { alreadyGone++; continue; }
+      done.push({ c, rowId: c.child.id, undo: "unflip" });
+      continue;
+    }
+    // Same row buildFacilityExceptionRow builds for deleteFacilityOccurrence.
+    const row: FacRow = { ...c.master };
+    for (const k of FACILITY_EXCEPTION_DROP_KEYS) delete row[k];
+    const { data, error } = await service.from("facility_events").insert({
+      ...row,
+      recurrence_parent_id: c.master.id,
+      original_date: c.date,
+      event_date: c.date,
+      is_exception: true,
+      is_recurring: false,
+      auto_removed_at: stampedAt,
+      auto_removed_reason: REASON,
+    }).select("id").single();
+    if (error) {
+      // 23505: staff edited or deleted this date since the read. Leave it.
+      if (error.code === "23505") { alreadyGone++; continue; }
+      failed.push({ ...describe(c), error: error.message });
+      continue;
+    }
+    done.push({ c, rowId: data.id, undo: "delete" });
+  }
+
+  // A sign-up that landed between the check and the write wins.
+  let undone = 0;
+  if (done.length) {
+    const again = await facBookedKeys(service, ids, o.dates);
+    if (again.error) {
+      failed.push({ error: `post-removal re-check failed (removals kept): ${again.error}` });
+    } else {
+      for (const d of [...done]) {
+        const ids2 = [d.c.master.id, d.c.child?.id].filter(Boolean);
+        const dates2 = [...new Set([d.c.date, d.c.seriesDate])];
+        if (!ids2.some((id) => dates2.some((dt) => again.keys.has(`${id}_${dt}`)))) continue;
+        const { error } = d.undo === "delete"
+          ? await service.from("facility_events").delete().eq("id", d.rowId)
+          : await service.from("facility_events")
+            .update({ is_exception: false, auto_removed_at: null, auto_removed_reason: null }).eq("id", d.rowId);
+        if (error) { failed.push({ ...describe(d.c), error: `booked mid-run; undo failed: ${error.message}` }); continue; }
+        done.splice(done.indexOf(d), 1);
+        undone++;
+      }
+    }
+  }
+
+  return {
+    ...summary,
+    removed: done.length,
+    already_gone: alreadyGone,
+    undone_booked_mid_run: undone,
+    failed: failed.length,
+    failures: failed.slice(0, 20),
+    occurrences: done.map((d) => ({ ...describe(d.c), exception_row_id: d.rowId })),
+  };
 }
 
 Deno.serve(async (req) => {
@@ -317,8 +538,17 @@ Deno.serve(async (req) => {
     kept_booked: keptBooked,
   };
 
+  // #489: the facility calendar's hour blocks, same window. Skipped on a
+  // one-coach hand-run (?coach_id=), which is about that coach's sessions.
+  const runFacility = () => onlyCoach
+    ? Promise.resolve({ ok: true, skipped: "coach_id filter" } as Record<string, unknown>)
+    : cleanFacilityEvents(service, { nowMs, windowEndMs, today, lastDay, dates, dryRun, limit });
+
   if (dryRun) {
-    return json(req, { ...summary, would_remove: toRemove.length, occurrences: toRemove.map(describe) });
+    return json(req, {
+      ...summary, would_remove: toRemove.length, occurrences: toRemove.map(describe),
+      facility_events: await runFacility(),
+    });
   }
 
   // ---- 4. remove ------------------------------------------------------------------
@@ -395,5 +625,6 @@ Deno.serve(async (req) => {
     failed: failed.length,
     failures: failed.slice(0, 20),
     occurrences: done.map((d) => ({ ...describe(d.c), exception_row_id: d.rowId })),
+    facility_events: await runFacility(),
   }, failed.length && !done.length ? 500 : 200);
 });

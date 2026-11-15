@@ -479,6 +479,9 @@ export function useMainPortalCounts(userId, userRole) {
   const [packageFlags, setPackageFlags] = useState([]);
   const [eventAssignments, setEventAssignments] = useState([]);
   const [ptVisitNotices, setPtVisitNotices] = useState([]);
+  // #492: NBP+ agreements signed with a custom monthly price that NBP has not
+  // countersigned yet. Admins only — the price is theirs to approve.
+  const [agreementSignoffs, setAgreementSignoffs] = useState([]);
 
   const refresh = useCallback(async () => {
     if (!userId) return;
@@ -651,11 +654,33 @@ export function useMainPortalCounts(userId, userRole) {
         console.error('PT notices error (notices stay hidden):', e);
         setPtVisitNotices([]);
       }
+
+      // #492: custom-price agreements waiting for NBP's sign-off. Clears
+      // itself when an admin or coach countersigns.
+      if (userRole === 'admin') {
+        try {
+          const { data: custom, error: customErr } = await supabase
+            .from('nbp_plus_agreements')
+            .select('id, user_id, athlete_name, term_months, custom_monthly_cents, athlete_signed_at')
+            .not('custom_monthly_cents', 'is', null)
+            .is('nbp_signed_at', null)
+            .order('athlete_signed_at', { ascending: false })
+            .limit(20);
+          if (customErr) throw customErr;
+          setAgreementSignoffs(custom || []);
+        } catch (e) {
+          console.error('Agreement sign-off notices error:', e);
+          setAgreementSignoffs([]);
+        }
+      } else {
+        setAgreementSignoffs([]);
+      }
     } else {
       setPendingSlots([]);
       setPackageFlags([]);
       setEventAssignments([]);
       setPtVisitNotices([]);
+      setAgreementSignoffs([]);
     }
   }, [userId, userRole]);
 
@@ -689,7 +714,7 @@ export function useMainPortalCounts(userId, userRole) {
     return () => { supabase.removeChannel(ch1); supabase.removeChannel(ch2); supabase.removeChannel(ch3); supabase.removeChannel(ch4); supabase.removeChannel(ch5); supabase.removeChannel(ch6); supabase.removeChannel(ch7); };
   }, [refresh, userId]);
 
-  return { unreadMessages, pendingSlots, pendingPayments, packageFlags, eventAssignments, ptVisitNotices, weeklyReminders, whoopNudges, refresh };
+  return { unreadMessages, pendingSlots, pendingPayments, packageFlags, eventAssignments, ptVisitNotices, agreementSignoffs, weeklyReminders, whoopNudges, refresh };
 }
 
 // Counts and details for the Work Portal: unread work messages + (admin) pending hours + pending time off.

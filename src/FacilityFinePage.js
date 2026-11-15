@@ -19,7 +19,8 @@ import { formatUserError } from './errorMessage';
 // ContractDocViewer in ContractPage.js, which solved the identical problem for
 // the player contract. Worth collapsing the two into one shared component the
 // next time either is touched.
-function FacilityFineDocViewer({ doc }) {
+// Exported for PrivacyDisclosurePage (#490), which shows a document the same way.
+export function FacilityFineDocViewer({ doc }) {
   if (!doc) return null;
   const ext = (doc.ext || '').toLowerCase();
   const isPdf = ext === 'pdf';

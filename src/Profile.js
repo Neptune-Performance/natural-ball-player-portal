@@ -930,10 +930,12 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
     setUploadingAvatar(true);
     try {
       const fileExt = file.name.split('.').pop();
+      // #494: the path is unique per upload, so no upsert — an upsert also
+      // needs SELECT + UPDATE on the object and was refused for athletes.
       const filePath = `${userId}/${Date.now()}.${fileExt}`;
       const { error: uploadError } = await supabase.storage
         .from('avatars')
-        .upload(filePath, file, { upsert: true });
+        .upload(filePath, file);
       if (uploadError) throw uploadError;
       const { data: { publicUrl } } = supabase.storage
         .from('avatars')

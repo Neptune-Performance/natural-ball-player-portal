@@ -20,6 +20,7 @@ import WaiverPage from './WaiverPage';
 import ContractPage from './ContractPage';
 import FacilityFinePage from './FacilityFinePage';
 import NbpPlusAgreementPage from './NbpPlusAgreementPage';
+import PrivacyDisclosurePage, { fetchPrivacyDisclosureAcknowledged } from './PrivacyDisclosurePage';
 import { isNbpPlusMember, fetchAgreementSigned } from './nbpPlusAgreement';
 import LetterOfIntentPage from './LetterOfIntentPage';
 import WorkPortalShell from './WorkPortal';
@@ -85,6 +86,9 @@ export default function App() {
   // dot, no page in the sidebar); false = training-group member who hasn't
   // signed the current document; true = signed.
   const [nbpPlusAgreementSigned, setNbpPlusAgreementSigned] = useState(null);
+  // #490: Client Data Privacy Disclosure, every role. null = no document
+  // readable (no dot, no false claim), false = red dot.
+  const [privacyDisclosureSigned, setPrivacyDisclosureSigned] = useState(null);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [currentPortal, setCurrentPortal] = useState(() => {
     try {
@@ -224,6 +228,10 @@ export default function App() {
     setNbpPlusAgreementSigned(await fetchAgreementSigned(uid));
   };
 
+  const checkPrivacyDisclosureStatus = async (uid) => {
+    setPrivacyDisclosureSigned(await fetchPrivacyDisclosureAcknowledged(uid));
+  };
+
   useEffect(() => {
     const hash = window.location.hash || '';
     const search = window.location.search || '';
@@ -247,6 +255,7 @@ export default function App() {
         checkLoiStatus(session.user.id);
         checkFacilityFineStatus(session.user.id);
         checkNbpPlusAgreementStatus(session.user.id);
+        checkPrivacyDisclosureStatus(session.user.id);
       } else {
         setUserRole(null);
         setUserId(null);
@@ -255,6 +264,7 @@ export default function App() {
         setLoiSigned(null);
         setFacilityFineSigned(null);
         setNbpPlusAgreementSigned(null);
+        setPrivacyDisclosureSigned(null);
       }
       setLoading(false);
     });
@@ -273,6 +283,7 @@ export default function App() {
               checkLoiStatus(session.user.id);
               checkFacilityFineStatus(session.user.id);
               checkNbpPlusAgreementStatus(session.user.id);
+              checkPrivacyDisclosureStatus(session.user.id);
             }
           }).catch((e) => console.error('auth fallback getSession failed:', e));
         }
@@ -427,7 +438,9 @@ export default function App() {
         facilityFineSigned={facilityFineSigned}
         setFacilityFineSigned={setFacilityFineSigned}
         nbpPlusAgreementSigned={nbpPlusAgreementSigned}
+        privacyDisclosureSigned={privacyDisclosureSigned}
         setNbpPlusAgreementSigned={setNbpPlusAgreementSigned}
+        setPrivacyDisclosureSigned={setPrivacyDisclosureSigned}
         currentPortal={currentPortal}
         setCurrentPortal={setCurrentPortal}
       />
@@ -910,7 +923,7 @@ function ResetPasswordPage({ session, onComplete }) {
   );
 }
 
-function MainApp({ userRole, secondaryRole, userId, userName, userAvatar, onLogout, currentView, setCurrentView, workPortalView, setWorkPortalView, waiverSigned, setWaiverSigned, contractSigned, setContractSigned, loiSigned, setLoiSigned, facilityFineSigned, setFacilityFineSigned, nbpPlusAgreementSigned, setNbpPlusAgreementSigned, currentPortal, setCurrentPortal }) {
+function MainApp({ userRole, secondaryRole, userId, userName, userAvatar, onLogout, currentView, setCurrentView, workPortalView, setWorkPortalView, waiverSigned, setWaiverSigned, contractSigned, setContractSigned, loiSigned, setLoiSigned, facilityFineSigned, setFacilityFineSigned, nbpPlusAgreementSigned, setNbpPlusAgreementSigned, privacyDisclosureSigned, setPrivacyDisclosureSigned, currentPortal, setCurrentPortal }) {
   const [viewProfileUserId, setViewProfileUserId] = useState(null);
   // #281: which Email Campaign sub-screen is open (send/history/templates/images/failed).
   const [emailCampaignSection, setEmailCampaignSection] = useState('send');
@@ -1261,6 +1274,7 @@ function MainApp({ userRole, secondaryRole, userId, userName, userAvatar, onLogo
         loiSigned={loiSigned}
         facilityFineSigned={facilityFineSigned}
         nbpPlusAgreementSigned={nbpPlusAgreementSigned}
+        privacyDisclosureSigned={privacyDisclosureSigned}
         onEmailCampaignNav={(key) => { setEmailCampaignSection(key); handleNav('email-campaigns'); }}
         onSwitchPortal={() => { setCurrentPortal('work'); setSidebarOpen(false); }}
         canSwitchRole={hasSecondary}
@@ -1339,6 +1353,7 @@ function MainApp({ userRole, secondaryRole, userId, userName, userAvatar, onLogo
             {currentView === 'loi' && <LetterOfIntentPage userId={userId} userRole={effectiveRole} onSigned={() => setLoiSigned(true)} />}
             {currentView === 'facility-fine' && <FacilityFinePage userId={userId} onSigned={() => setFacilityFineSigned(true)} />}
             {currentView === 'nbp-plus-agreement' && <NbpPlusAgreementPage userId={userId} userRole={effectiveRole} onSigned={() => setNbpPlusAgreementSigned(true)} />}
+            {currentView === 'privacy-disclosure' && <PrivacyDisclosurePage userId={userId} userRole={effectiveRole} onAcknowledged={() => setPrivacyDisclosureSigned(true)} />}
             {currentView === 'settings' && (userRole === 'admin' || userRole === 'coach') && <AdminSettings userId={userId} userRole={effectiveRole} onNavigateToProfile={openProfileFrom('settings')} />}
           </div>
         </div>
@@ -1534,7 +1549,7 @@ function MainApp({ userRole, secondaryRole, userId, userName, userAvatar, onLogo
   );
 }
 
-function Sidebar({ userRole, userName, userAvatar, currentView, setCurrentView, onLogout, unreadMessageCount = 0, pendingSlotCount = 0, waiverSigned, contractSigned, loiSigned, facilityFineSigned, nbpPlusAgreementSigned, onEmailCampaignNav, onSwitchPortal, canSwitchRole, otherRole, onSwitchRole, mobileOpen }) {
+function Sidebar({ userRole, userName, userAvatar, currentView, setCurrentView, onLogout, unreadMessageCount = 0, pendingSlotCount = 0, waiverSigned, contractSigned, loiSigned, facilityFineSigned, nbpPlusAgreementSigned, privacyDisclosureSigned, onEmailCampaignNav, onSwitchPortal, canSwitchRole, otherRole, onSwitchRole, mobileOpen }) {
   const [documentsExpanded, setDocumentsExpanded] = useState(true);
   const [emailCampaignExpanded, setEmailCampaignExpanded] = useState(false);
   // #371: Communication is an expandable parent for admins only (Email Campaign
@@ -1545,7 +1560,7 @@ function Sidebar({ userRole, userName, userAvatar, currentView, setCurrentView, 
   // exactly as tall as it is today for every role on first paint, and it matches
   // emailCampaignExpanded's existing `false` default rather than fighting it.
   const [communicationExpanded, setCommunicationExpanded] = useState(false);
-  const anyDocUnsigned = waiverSigned === false || contractSigned === false || loiSigned === false || facilityFineSigned === false || nbpPlusAgreementSigned === false;
+  const anyDocUnsigned = waiverSigned === false || contractSigned === false || loiSigned === false || facilityFineSigned === false || nbpPlusAgreementSigned === false || privacyDisclosureSigned === false;
   return (
     <div className={`w-64 bg-gray-900 text-white h-screen fixed left-0 top-0 p-4 flex flex-col z-50 transition-transform duration-200 ${mobileOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0`}>
       <div className="mb-4">
@@ -1652,6 +1667,19 @@ function Sidebar({ userRole, userName, userAvatar, currentView, setCurrentView, 
                 <FileText size={16} />
                 <span className="flex-1 text-left">Facility Fine</span>
                 {facilityFineSigned === false && (
+                  <span className="w-2 h-2 bg-red-500 rounded-full flex-shrink-0"></span>
+                )}
+              </button>
+              {/* #490: every account acknowledges the uploaded disclosure. */}
+              <button
+                onClick={() => setCurrentView('privacy-disclosure')}
+                className={`w-full flex items-center space-x-3 px-4 py-2 rounded-lg transition text-sm ${
+                  currentView === 'privacy-disclosure' ? 'bg-blue-200 text-blue-900' : 'hover:bg-gray-800'
+                }`}
+              >
+                <FileText size={16} />
+                <span className="flex-1 text-left">Privacy Disclosure</span>
+                {privacyDisclosureSigned === false && (
                   <span className="w-2 h-2 bg-red-500 rounded-full flex-shrink-0"></span>
                 )}
               </button>

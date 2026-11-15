@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Bell, MessageSquare, Clock, Plane, ArrowLeftRight, Briefcase, Home, CreditCard, Trash2, AlertTriangle, Activity, CalendarPlus, HeartPulse, ClipboardList, Dumbbell, X } from 'lucide-react';
+import { Bell, MessageSquare, Clock, Plane, ArrowLeftRight, Briefcase, Home, CreditCard, Trash2, AlertTriangle, Activity, CalendarPlus, HeartPulse, ClipboardList, Dumbbell, FileSignature, X } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import { formatUserError } from './errorMessage';
 import { PAYMENT_DUE_NOTICES_ENABLED } from './useNotifications';
+import NbpPlusAgreementPage from './NbpPlusAgreementPage';
 
 // #307: a purchase that was actually paid for must never be deleted — that
 // destroys the record that money came in and takes its session-usage history
@@ -102,6 +103,16 @@ function fmtDate(iso) {
 export default function NotificationBell({ currentPortal, mainCounts, workCounts, onJump, userRole, onDeletePayment, needsWhoop, onOpenWhoop, onDismissEventAssignment, onOpenAthletePt, onDismissPtNotice, onDismissAllPtNotices, onOpenWeeklyReminder, onDismissWeeklyReminder, onOpenWhoopNudge, onDismissWhoopNudge, checkinOpenCount = 0, onOpenCheckin }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
+  // #492: the custom-price agreement an admin opened from the bell, shown in
+  // the same modal AgreementStatusChip uses. `me` is the signed-in user id,
+  // needed to countersign.
+  const [signoff, setSignoff] = useState(null);
+  const openSignoff = async (row) => {
+    setOpen(false);
+    const { data } = await supabase.auth.getUser();
+    setSignoff({ athleteId: row.user_id, me: data?.user?.id || null });
+  };
+  const closeSignoff = () => { setSignoff(null); mainCounts?.refresh?.(); };
 
   useEffect(() => {
     const onClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
@@ -121,6 +132,8 @@ export default function NotificationBell({ currentPortal, mainCounts, workCounts
     + (mainCounts?.eventAssignments?.length || 0)
     // #402: PT entries logged on this coach/admin's athletes, not yet seen.
     + (mainCounts?.ptVisitNotices?.length || 0)
+    // #492: NBP+ agreements with a custom price awaiting NBP sign-off.
+    + (mainCounts?.agreementSignoffs?.length || 0)
     // #438: this week's stats/PT check-in, until the athlete clears it.
     + (mainCounts?.weeklyReminders?.length || 0)
     + (mainCounts?.whoopNudges?.length || 0)
@@ -395,6 +408,27 @@ export default function NotificationBell({ currentPortal, mainCounts, workCounts
               </div>
             ))}
 
+            {(mainCounts?.agreementSignoffs || []).map(a => (
+              <button
+                key={`main-agreement-signoff-${a.id}`}
+                onClick={() => openSignoff(a)}
+                className="w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 transition"
+              >
+                <div className="flex items-start space-x-3">
+                  <div className="mt-0.5"><FileSignature size={16} className="text-amber-600" /></div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-900">
+                      <span className="font-medium">{a.athlete_name || 'An athlete'}</span> signed the NBP+ agreement with a custom price
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      ${(a.custom_monthly_cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / month · {a.term_months} months · needs your sign-off
+                    </p>
+                  </div>
+                  {currentPortal !== 'main' && <PortalTag kind="main" />}
+                </div>
+              </button>
+            ))}
+
             {(mainCounts?.ptVisitNotices || []).map(visit => (
               <div
                 key={`main-pt-visit-${visit.id}`}
@@ -578,6 +612,17 @@ export default function NotificationBell({ currentPortal, mainCounts, workCounts
                 </div>
               </button>
             ))}
+          </div>
+        </div>
+      )}
+
+      {signoff && (
+        <div className="fixed inset-0 z-[60] bg-black/50 flex items-start justify-center overflow-y-auto p-4" onClick={closeSignoff}>
+          <div className="bg-gray-50 rounded-xl shadow-xl w-full max-w-4xl my-4 relative" onClick={(e) => e.stopPropagation()}>
+            <button onClick={closeSignoff} className="absolute top-3 right-3 p-1.5 rounded-full bg-white border border-gray-200 text-gray-500 hover:text-gray-800 z-10" aria-label="Close">
+              <X size={16} />
+            </button>
+            <NbpPlusAgreementPage userId={signoff.me} userRole={userRole} athleteId={signoff.athleteId} />
           </div>
         </div>
       )}

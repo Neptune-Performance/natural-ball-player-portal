@@ -92,10 +92,18 @@ export const RATING_CATEGORIES = [
     ],
   },
   {
-    // The S&C template has a "10 Yard Sprint" box that nobody has filled in
-    // yet; until it is, base running is coach-rated only.
+    // #488: the Base Running Assessment — five timed runs (best time typed in
+    // the box, ranked in the age group) plus the coach's Poor / Avg / Good
+    // route grades (0 / 50 / 100, averaged). The S&C template's "10 Yard
+    // Sprint" box counts too once someone fills it in.
     key: 'base_running', label: 'Base Running', short: 'RUN', weight: 1,
     metrics: [
+      { key: 'run_home_1st', label: 'Home to 1st', unit: 's', mode: 'percentile', weight: 1, lowerIsBetter: true },
+      { key: 'run_home_2nd', label: 'Home to 2nd', unit: 's', mode: 'percentile', weight: 1, lowerIsBetter: true },
+      { key: 'run_home_3rd', label: 'Home to 3rd', unit: 's', mode: 'percentile', weight: 1, lowerIsBetter: true },
+      { key: 'run_home_home', label: 'Home to home', unit: 's', mode: 'percentile', weight: 1, lowerIsBetter: true },
+      { key: 'run_steal', label: 'Straight steal', unit: 's', mode: 'percentile', weight: 1, lowerIsBetter: true },
+      { key: 'run_route_grade', label: 'Route grades (Poor 0 / Avg 50 / Good 100)', unit: '', mode: 'absolute', poor: 0, elite: 100, weight: 1.5 },
       { key: 'run_sprint10', label: '10-yard sprint', unit: 's', mode: 'percentile', weight: 1, lowerIsBetter: true },
     ],
   },
