@@ -88,8 +88,6 @@ function AdminSettingsInner({ userId, userRole, onNavigateToProfile }) {
   const [showCreateUser, setShowCreateUser] = useState(false);
   const [showCreateTeam, setShowCreateTeam] = useState(false);
   const [showAssignRole, setShowAssignRole] = useState(false);
-  const [showCreateProspect, setShowCreateProspect] = useState(false);
-  const [prospects, setProspects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [waiverSignatures, setWaiverSignatures] = useState([]);
   const [contractSignatures, setContractSignatures] = useState([]);
@@ -97,15 +95,6 @@ function AdminSettingsInner({ userId, userRole, onNavigateToProfile }) {
 
   const coaches = users.filter(u => u.role === 'coach');
   const players = users.filter(u => u.role === 'player');
-
-  const fetchProspects = async () => {
-    const { data, error } = await supabase
-      .from('prospects')
-      .select('*')
-      .order('full_name');
-    if (error) console.error('Error fetching prospects:', error);
-    else setProspects(data || []);
-  };
 
   const fetchWaiverSignatures = async () => {
     const { data, error } = await supabase
@@ -134,7 +123,6 @@ function AdminSettingsInner({ userId, userRole, onNavigateToProfile }) {
   useEffect(() => {
     fetchTeams();
     fetchUsers();
-    fetchProspects();
     fetchWaiverSignatures();
     fetchContractSignatures();
     fetchMedicalHistories();
@@ -243,16 +231,6 @@ function AdminSettingsInner({ userId, userRole, onNavigateToProfile }) {
               Coach Tasks
             </button>
             <button
-              onClick={() => setActiveTab('prospects')}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition ${
-                activeTab === 'prospects'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Prospects
-            </button>
-            <button
               onClick={() => setActiveTab('codes')}
               className={`py-4 px-1 border-b-2 font-medium text-sm transition ${
                 activeTab === 'codes'
@@ -261,16 +239,6 @@ function AdminSettingsInner({ userId, userRole, onNavigateToProfile }) {
               }`}
             >
               Codes
-            </button>
-            <button
-              onClick={() => setActiveTab('inventory')}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition ${
-                activeTab === 'inventory'
-                  ? 'border-blue-600 text-blue-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              Inventory
             </button>
             <button
               onClick={() => setActiveTab('documents')}
@@ -360,20 +328,8 @@ function AdminSettingsInner({ userId, userRole, onNavigateToProfile }) {
           {activeTab === 'coach-tasks' && (
             <CoachTasksTab coaches={coaches} userId={userId} />
           )}
-          {activeTab === 'prospects' && (
-            <ProspectsTab
-              prospects={prospects}
-              teams={teams}
-              showCreateProspect={showCreateProspect}
-              setShowCreateProspect={setShowCreateProspect}
-              refreshProspects={fetchProspects}
-            />
-          )}
           {activeTab === 'codes' && (
             <CodesTab players={players} />
-          )}
-          {activeTab === 'inventory' && (
-            <InventoryTab />
           )}
           {activeTab === 'documents' && (
             <DocumentsTab players={players} waiverSignatures={waiverSignatures} contractSignatures={contractSignatures} medicalHistories={medicalHistories} />
@@ -2342,15 +2298,6 @@ function TeamDetailModal({ team, users, onClose, onRefresh }) {
   const [showMemberDropdown, setShowMemberDropdown] = useState(false);
   const memberDropdownRef = useRef(null);
 
-  // Prospects state
-  const [teamProspects, setTeamProspects] = useState([]);
-  const [allProspects, setAllProspects] = useState([]);
-  const [prospectSearch, setProspectSearch] = useState('');
-  const [showProspectDropdown, setShowProspectDropdown] = useState(false);
-  const [addProspectId, setAddProspectId] = useState('');
-  const [addingProspect, setAddingProspect] = useState(false);
-  const prospectDropdownRef = useRef(null);
-
   const fetchMembers = async () => {
     const { data, error } = await supabase
       .from('team_members')
@@ -2365,32 +2312,14 @@ function TeamDetailModal({ team, users, onClose, onRefresh }) {
     setLoading(false);
   };
 
-  const fetchAllProspects = async () => {
-    const { data } = await supabase.from('prospects').select('*').order('full_name');
-    setAllProspects(data || []);
-  };
-
-  const fetchTeamProspects = async () => {
-    const { data } = await supabase
-      .from('team_prospects')
-      .select('*, prospects(id, full_name, email, position, grade)')
-      .eq('team_id', team.id);
-    setTeamProspects(data || []);
-  };
-
   useEffect(() => {
     fetchMembers();
-    fetchAllProspects();
-    fetchTeamProspects();
   }, [team.id]);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
       if (memberDropdownRef.current && !memberDropdownRef.current.contains(e.target)) {
         setShowMemberDropdown(false);
-      }
-      if (prospectDropdownRef.current && !prospectDropdownRef.current.contains(e.target)) {
-        setShowProspectDropdown(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -2459,37 +2388,6 @@ function TeamDetailModal({ team, users, onClose, onRefresh }) {
       fetchMembers();
       onRefresh();
     }
-  };
-
-  const teamProspectIds = new Set(teamProspects.map(tp => tp.prospect_id));
-  const availableProspects = allProspects.filter(p => !teamProspectIds.has(p.id));
-  const filteredAvailableProspects = availableProspects.filter(p => {
-    const q = prospectSearch.toLowerCase();
-    if (!q) return true;
-    return (p.full_name || '').toLowerCase().includes(q) || (p.email || '').toLowerCase().includes(q);
-  });
-
-  const handleAddProspect = async () => {
-    if (!addProspectId) return;
-    setAddingProspect(true);
-    setError('');
-    const { error: insertError } = await supabase.from('team_prospects').insert({
-      team_id: team.id,
-      prospect_id: addProspectId,
-    });
-    if (insertError) setError(insertError.message);
-    else {
-      setAddProspectId('');
-      setProspectSearch('');
-      fetchTeamProspects();
-    }
-    setAddingProspect(false);
-  };
-
-  const handleRemoveProspect = async (tpId) => {
-    const { error: deleteError } = await supabase.from('team_prospects').delete().eq('id', tpId);
-    if (deleteError) setError(deleteError.message);
-    else fetchTeamProspects();
   };
 
   const handleDeleteTeam = async () => {
@@ -2617,7 +2515,7 @@ function TeamDetailModal({ team, users, onClose, onRefresh }) {
             )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div>
             {/* Members Column */}
             <div>
               {/* Members List */}
@@ -2732,94 +2630,6 @@ function TeamDetailModal({ team, users, onClose, onRefresh }) {
               </div>
             </div>
 
-            {/* Prospects Column */}
-            <div>
-              <div>
-                <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">
-                  Prospects ({teamProspects.length})
-                </h4>
-                {teamProspects.length === 0 ? (
-                  <p className="text-gray-500 text-sm py-4 text-center">No prospects yet</p>
-                ) : (
-                  <div className="space-y-2">
-                    {teamProspects.map(tp => (
-                      <div key={tp.id} className="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-3">
-                        <div className="flex items-center space-x-3">
-                          <div className="w-8 h-8 bg-purple-600 rounded-full flex items-center justify-center text-white text-sm font-medium">
-                            {tp.prospects?.full_name?.charAt(0) || '?'}
-                          </div>
-                          <div>
-                            <p className="text-sm font-medium text-gray-900">{tp.prospects?.full_name}</p>
-                            <p className="text-xs text-gray-500">{tp.prospects?.email || tp.prospects?.position || ''}</p>
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => handleRemoveProspect(tp.id)}
-                          className="text-gray-400 hover:text-red-600 transition"
-                          title="Remove prospect"
-                        >
-                          <X size={16} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Add Prospect */}
-              <div className="mt-4">
-                <h4 className="text-sm font-semibold text-gray-700 uppercase tracking-wide mb-3">
-                  Add Prospect
-                </h4>
-                <div className="flex space-x-2">
-                  <div className="flex-1 relative" ref={prospectDropdownRef}>
-                    <input
-                      type="text"
-                      value={prospectSearch}
-                      onChange={(e) => {
-                        setProspectSearch(e.target.value);
-                        setAddProspectId('');
-                        setShowProspectDropdown(true);
-                      }}
-                      onFocus={() => setShowProspectDropdown(true)}
-                      placeholder="Search prospects..."
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                    {showProspectDropdown && (
-                      <div className="absolute z-10 mt-1 w-full bg-white border border-gray-300 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                        {filteredAvailableProspects.length === 0 ? (
-                          <div className="px-3 py-2 text-sm text-gray-500">No prospects found</div>
-                        ) : (
-                          filteredAvailableProspects.map(p => (
-                            <button
-                              key={p.id}
-                              type="button"
-                              onClick={() => {
-                                setAddProspectId(p.id);
-                                setProspectSearch(p.full_name);
-                                setShowProspectDropdown(false);
-                              }}
-                              className="w-full text-left px-3 py-2 text-sm hover:bg-purple-50 transition flex items-center justify-between"
-                            >
-                              <span>{p.full_name}</span>
-                              <span className="text-xs text-gray-400">{p.email || p.position || ''}</span>
-                            </button>
-                          ))
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    onClick={handleAddProspect}
-                    disabled={!addProspectId || addingProspect}
-                    className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 transition disabled:opacity-50 flex items-center space-x-1"
-                  >
-                    <UserPlus size={14} />
-                    <span>{addingProspect ? '...' : 'Add'}</span>
-                  </button>
-                </div>
-              </div>
-            </div>
           </div>
 
           {/* Delete Team */}
@@ -2854,462 +2664,6 @@ function TeamDetailModal({ team, users, onClose, onRefresh }) {
                 <span>Delete Team</span>
               </button>
             )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ============================================
-// PROSPECTS TAB
-// ============================================
-
-function ProspectsTab({ prospects, teams, showCreateProspect, setShowCreateProspect, refreshProspects }) {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [editingProspect, setEditingProspect] = useState(null);
-
-  const filteredProspects = prospects.filter(p => {
-    const q = searchQuery.toLowerCase();
-    return (p.full_name || '').toLowerCase().includes(q) || (p.email || '').toLowerCase().includes(q);
-  });
-
-  const handleDeleteProspect = async (id) => {
-    if (!window.confirm('Delete this prospect?')) return;
-    const { error } = await supabase.from('prospects').delete().eq('id', id);
-    if (error) alert('Error deleting prospect: ' + formatUserError(error));
-    else refreshProspects();
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h3 className="text-lg font-semibold text-gray-900">All Prospects</h3>
-        <button
-          onClick={() => setShowCreateProspect(true)}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition flex items-center space-x-2"
-        >
-          <Plus size={18} />
-          <span>Create Prospect</span>
-        </button>
-      </div>
-
-      <div className="relative">
-        <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search prospects by name or email..."
-          className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-        />
-      </div>
-
-      {filteredProspects.length === 0 ? (
-        <div className="text-center py-12 text-gray-500">
-          <Users size={48} className="mx-auto mb-4 text-gray-300" />
-          <p>{searchQuery ? 'No prospects match your search.' : 'No prospects yet. Create one to get started.'}</p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {filteredProspects.map(prospect => (
-            <div key={prospect.id} className="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-3">
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 bg-purple-600 rounded-full flex items-center justify-center text-white text-sm font-medium">
-                  {(prospect.full_name || '?').charAt(0)}
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{prospect.full_name}</p>
-                  <p className="text-xs text-gray-500">{prospect.email || 'No email'}</p>
-                </div>
-              </div>
-              <div className="flex items-center space-x-3">
-                {prospect.position && (
-                  <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">{prospect.position}</span>
-                )}
-                {prospect.grade && (
-                  <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-200 text-gray-700">{prospect.grade}</span>
-                )}
-                <button onClick={() => setEditingProspect(prospect)} className="text-gray-400 hover:text-blue-600 transition">
-                  <Edit2 size={14} />
-                </button>
-                <button onClick={() => handleDeleteProspect(prospect.id)} className="text-gray-400 hover:text-red-600 transition">
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {showCreateProspect && (
-        <CreateProspectModal
-          teams={teams}
-          onClose={() => setShowCreateProspect(false)}
-          onSuccess={() => {
-            setShowCreateProspect(false);
-            refreshProspects();
-          }}
-        />
-      )}
-
-      {editingProspect && (
-        <EditProspectModal
-          prospect={editingProspect}
-          teams={teams}
-          onClose={() => setEditingProspect(null)}
-          onSuccess={() => {
-            setEditingProspect(null);
-            refreshProspects();
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-function CreateProspectModal({ teams, onClose, onSuccess }) {
-  const [formData, setFormData] = useState({
-    full_name: '',
-    email: '',
-    phone: '',
-    height: '',
-    weight: '',
-    team_id: '',
-    jersey_number: '',
-    position: '',
-    grade: '',
-    bats: 'Right',
-    throws: 'Right'
-  });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [selectedUserId, setSelectedUserId] = useState(null);
-  const [userSearch, setUserSearch] = useState('');
-  const [userResults, setUserResults] = useState([]);
-  const [searchingUsers, setSearchingUsers] = useState(false);
-
-  useEffect(() => {
-    if (userSearch.length < 2) { setUserResults([]); return; }
-    const timeout = setTimeout(async () => {
-      setSearchingUsers(true);
-      const q = userSearch.toLowerCase();
-      const { data: users } = await supabase.from('users').select('id, full_name, email, phone, height, weight, role').ilike('full_name', `%${q}%`).limit(8);
-      if (users && users.length > 0) {
-        const userIds = users.map(u => u.id);
-        const { data: profiles } = await supabase.from('player_profiles').select('user_id, jersey_number, position, grade, bats, throws').in('user_id', userIds);
-        const profileMap = {};
-        (profiles || []).forEach(p => { profileMap[p.user_id] = p; });
-        setUserResults(users.map(u => ({ ...u, profile: profileMap[u.id] || null })));
-      } else {
-        setUserResults([]);
-      }
-      setSearchingUsers(false);
-    }, 300);
-    return () => clearTimeout(timeout);
-  }, [userSearch]);
-
-  const selectUser = (user) => {
-    const p = user.profile || {};
-    setFormData({
-      full_name: user.full_name || '',
-      email: user.email || '',
-      phone: user.phone || '',
-      height: user.height || '',
-      weight: user.weight || '',
-      team_id: '',
-      jersey_number: p.jersey_number || '',
-      position: p.position || '',
-      grade: p.grade || '',
-      bats: p.bats || 'Right',
-      throws: p.throws || 'Right',
-    });
-    setSelectedUserId(user.id);
-    setUserSearch('');
-    setUserResults([]);
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-
-    try {
-      const { error: insertError } = await supabase.from('prospects').insert({
-        name: formData.full_name,
-        full_name: formData.full_name,
-        email: formData.email || null,
-        phone: formData.phone || null,
-        height: formData.height || null,
-        weight: formData.weight || null,
-        team_id: formData.team_id || null,
-        jersey_number: formData.jersey_number || null,
-        position: formData.position || null,
-        grade: formData.grade || null,
-        bats: formData.bats,
-        throws: formData.throws,
-        player_id: selectedUserId || null,
-      });
-      if (insertError) throw insertError;
-      onSuccess();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const inputClass = "w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500";
-
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-        <div className="sticky top-0 bg-white border-b border-gray-200 p-6 flex items-center justify-between">
-          <h3 className="text-xl font-bold text-gray-900">Create Prospect</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={24} /></button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">{error}</div>}
-
-          {/* Import from existing user */}
-          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-            <label className="block text-sm font-medium text-blue-900 mb-2">
-              <UserPlus size={16} className="inline mr-1 -mt-0.5" />
-              Import from Existing User
-            </label>
-            {selectedUserId ? (
-              <div className="flex items-center justify-between bg-white border border-blue-300 rounded-lg px-3 py-2">
-                <span className="text-sm text-gray-900 font-medium">{formData.full_name} — fields populated below</span>
-                <button type="button" onClick={() => { setSelectedUserId(null); setFormData({ full_name: '', email: '', phone: '', height: '', weight: '', team_id: '', jersey_number: '', position: '', grade: '', bats: 'Right', throws: 'Right' }); }} className="text-xs text-red-600 hover:text-red-800">Clear</button>
-              </div>
-            ) : (
-              <div className="relative">
-                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-blue-400" />
-                <input
-                  type="text"
-                  value={userSearch}
-                  onChange={(e) => setUserSearch(e.target.value)}
-                  placeholder="Search users by name to auto-fill..."
-                  className="w-full pl-9 pr-4 py-2 border border-blue-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-                />
-                {userResults.length > 0 && (
-                  <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                    {userResults.map(u => (
-                      <button key={u.id} type="button" onClick={() => selectUser(u)} className="w-full text-left px-4 py-2 hover:bg-blue-50 border-b border-gray-100 last:border-0">
-                        <div className="text-sm font-medium text-gray-900">{u.full_name}</div>
-                        <div className="text-xs text-gray-500">{u.email}{u.profile?.position ? ` · ${u.profile.position}` : ''}{u.role ? ` · ${u.role}` : ''}</div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                {searchingUsers && <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-sm text-gray-500">Searching...</div>}
-                {userSearch.length >= 2 && !searchingUsers && userResults.length === 0 && <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-sm text-gray-500">No users found</div>}
-              </div>
-            )}
-            <p className="text-xs text-blue-700 mt-2">Search for an existing user to auto-fill their info, or fill in manually below.</p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Full Name *</label>
-              <input type="text" required value={formData.full_name} onChange={(e) => setFormData({...formData, full_name: e.target.value})} className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
-              <input type="email" value={formData.email} onChange={(e) => setFormData({...formData, email: e.target.value})} className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Phone</label>
-              <input type="tel" value={formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value})} className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Height</label>
-              <input type="text" placeholder="e.g., 6'2&quot;, 72 in" value={formData.height} onChange={(e) => setFormData({...formData, height: e.target.value})} className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Weight</label>
-              <input type="text" placeholder="e.g., 185 lbs" value={formData.weight} onChange={(e) => setFormData({...formData, weight: e.target.value})} className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Assign to Team</label>
-              <select value={formData.team_id} onChange={(e) => setFormData({...formData, team_id: e.target.value})} className={inputClass}>
-                <option value="">No team</option>
-                {teams.map(team => <option key={team.id} value={team.id}>{team.name}</option>)}
-              </select>
-            </div>
-          </div>
-
-          <div className="pt-4 border-t border-gray-200">
-            <h4 className="font-semibold text-gray-900 mb-4">Player Details</h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Jersey Number</label>
-                <input type="text" value={formData.jersey_number} onChange={(e) => setFormData({...formData, jersey_number: e.target.value})} className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Position</label>
-                <input type="text" placeholder="e.g., SS, P, OF" value={formData.position} onChange={(e) => setFormData({...formData, position: e.target.value})} className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Grade</label>
-                <input type="text" placeholder="e.g., 8th, 10th" value={formData.grade} onChange={(e) => setFormData({...formData, grade: e.target.value})} className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Bats</label>
-                <select value={formData.bats} onChange={(e) => setFormData({...formData, bats: e.target.value})} className={inputClass}>
-                  <option value="Right">Right</option>
-                  <option value="Left">Left</option>
-                  <option value="Switch">Switch</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Throws</label>
-                <select value={formData.throws} onChange={(e) => setFormData({...formData, throws: e.target.value})} className={inputClass}>
-                  <option value="Right">Right</option>
-                  <option value="Left">Left</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex space-x-3 pt-4">
-            <button type="button" onClick={onClose} className="flex-1 border border-gray-300 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-50 transition">Cancel</button>
-            <button type="submit" disabled={loading} className="flex-1 bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 transition disabled:opacity-50">
-              {loading ? 'Creating...' : 'Create Prospect'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-function EditProspectModal({ prospect, teams, onClose, onSuccess }) {
-  const [formData, setFormData] = useState({
-    full_name: prospect.full_name || '',
-    email: prospect.email || '',
-    phone: prospect.phone || '',
-    height: prospect.height || '',
-    weight: prospect.weight || '',
-    team_id: prospect.team_id || '',
-    jersey_number: prospect.jersey_number || '',
-    position: prospect.position || '',
-    grade: prospect.grade || '',
-    bats: prospect.bats || 'Right',
-    throws: prospect.throws || 'Right'
-  });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const handleSave = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const { error: updateError } = await supabase.from('prospects').update({
-        name: formData.full_name,
-        full_name: formData.full_name,
-        email: formData.email || null,
-        phone: formData.phone || null,
-        height: formData.height || null,
-        weight: formData.weight || null,
-        team_id: formData.team_id || null,
-        jersey_number: formData.jersey_number || null,
-        position: formData.position || null,
-        grade: formData.grade || null,
-        bats: formData.bats,
-        throws: formData.throws,
-      }).eq('id', prospect.id);
-      if (updateError) throw updateError;
-      onSuccess();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const inputClass = "w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500";
-
-  return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-        <div className="sticky top-0 bg-white border-b border-gray-200 p-6 flex items-center justify-between">
-          <h3 className="text-xl font-bold text-gray-900">Edit Prospect</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={24} /></button>
-        </div>
-
-        <div className="p-6 space-y-4">
-          {error && <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">{error}</div>}
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Full Name *</label>
-              <input type="text" required value={formData.full_name} onChange={(e) => setFormData({...formData, full_name: e.target.value})} className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
-              <input type="email" value={formData.email} onChange={(e) => setFormData({...formData, email: e.target.value})} className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Phone</label>
-              <input type="tel" value={formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value})} className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Height</label>
-              <input type="text" value={formData.height} onChange={(e) => setFormData({...formData, height: e.target.value})} className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Weight</label>
-              <input type="text" value={formData.weight} onChange={(e) => setFormData({...formData, weight: e.target.value})} className={inputClass} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Assign to Team</label>
-              <select value={formData.team_id} onChange={(e) => setFormData({...formData, team_id: e.target.value})} className={inputClass}>
-                <option value="">No team</option>
-                {teams.map(team => <option key={team.id} value={team.id}>{team.name}</option>)}
-              </select>
-            </div>
-          </div>
-
-          <div className="pt-4 border-t border-gray-200">
-            <h4 className="font-semibold text-gray-900 mb-4">Player Details</h4>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Jersey Number</label>
-                <input type="text" value={formData.jersey_number} onChange={(e) => setFormData({...formData, jersey_number: e.target.value})} className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Position</label>
-                <input type="text" value={formData.position} onChange={(e) => setFormData({...formData, position: e.target.value})} className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Grade</label>
-                <input type="text" value={formData.grade} onChange={(e) => setFormData({...formData, grade: e.target.value})} className={inputClass} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Bats</label>
-                <select value={formData.bats} onChange={(e) => setFormData({...formData, bats: e.target.value})} className={inputClass}>
-                  <option value="Right">Right</option>
-                  <option value="Left">Left</option>
-                  <option value="Switch">Switch</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Throws</label>
-                <select value={formData.throws} onChange={(e) => setFormData({...formData, throws: e.target.value})} className={inputClass}>
-                  <option value="Right">Right</option>
-                  <option value="Left">Left</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex space-x-3 pt-4">
-            <button type="button" onClick={onClose} className="flex-1 border border-gray-300 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-50 transition">Cancel</button>
-            <button type="button" onClick={handleSave} disabled={loading || !formData.full_name.trim()} className="flex-1 bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-700 transition disabled:opacity-50">
-              {loading ? 'Saving...' : 'Save Changes'}
-            </button>
           </div>
         </div>
       </div>
@@ -3556,254 +2910,6 @@ function CodesTab({ players }) {
           )}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-// ============================================
-// INVENTORY TAB
-// ============================================
-
-const INVENTORY_CATEGORIES = ['Socks', 'Belts', 'Hats', 'Shorts', 'Shirts', 'Jerseys', 'Sweatshirts', 'Long Sleeve', 'Pants'];
-
-function InventoryTab() {
-  const [items, setItems] = useState([]);
-  const [threshold, setThreshold] = useState(5);
-  const [settingsId, setSettingsId] = useState(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => { fetchInventory(); }, []);
-
-  const fetchInventory = async () => {
-    const [{ data: itemData }, { data: settingsData }] = await Promise.all([
-      supabase.from('inventory_items').select('*').order('category').order('item').order('color').order('size'),
-      supabase.from('inventory_settings').select('*').limit(1).maybeSingle(),
-    ]);
-    setItems(itemData || []);
-    if (settingsData) {
-      setThreshold(settingsData.low_stock_threshold);
-      setSettingsId(settingsData.id);
-    }
-    setLoading(false);
-  };
-
-  const addRow = async () => {
-    const { data, error } = await supabase
-      .from('inventory_items')
-      .insert({ category: '', item: '', color: '', size: '', qty_in_stock: 0, on_order: 0 })
-      .select()
-      .single();
-    if (error) { alert('Error adding row: ' + formatUserError(error)); return; }
-    setItems([...items, data]);
-  };
-
-  const updateItem = async (id, field, value) => {
-    const isNumber = field === 'qty_in_stock' || field === 'on_order';
-    const val = isNumber ? (parseInt(value) || 0) : value;
-    const { error } = await supabase
-      .from('inventory_items')
-      .update({ [field]: val, updated_at: new Date().toISOString() })
-      .eq('id', id);
-    if (error) { console.error('Error updating item:', error); return; }
-    setItems(prev => prev.map(i => i.id === id ? { ...i, [field]: val } : i));
-  };
-
-  const deleteItem = async (id) => {
-    const { error } = await supabase.from('inventory_items').delete().eq('id', id);
-    if (error) { console.error('Error deleting item:', error); return; }
-    setItems(prev => prev.filter(i => i.id !== id));
-  };
-
-  const updateThreshold = async (value) => {
-    const val = parseInt(value) || 0;
-    setThreshold(val);
-    if (settingsId) {
-      await supabase.from('inventory_settings').update({ low_stock_threshold: val }).eq('id', settingsId);
-    }
-  };
-
-  const getStatus = (qty) => {
-    if (qty <= 0) return { label: 'OUT OF STOCK', color: 'bg-red-100 text-red-700' };
-    if (qty <= threshold) return { label: 'LOW STOCK', color: 'bg-yellow-100 text-yellow-700' };
-    return { label: 'OK', color: 'bg-green-100 text-green-700' };
-  };
-
-  // Summary metrics
-  const totalSKUs = items.length;
-  const totalInStock = items.reduce((sum, i) => sum + (i.qty_in_stock || 0), 0);
-  const totalOnOrder = items.reduce((sum, i) => sum + (i.on_order || 0), 0);
-  const totalExpected = totalInStock + totalOnOrder;
-  const outOfStockCount = items.filter(i => (i.qty_in_stock || 0) <= 0).length;
-  const lowStockCount = items.filter(i => (i.qty_in_stock || 0) > 0 && (i.qty_in_stock || 0) <= threshold).length;
-  const okCount = items.filter(i => (i.qty_in_stock || 0) > threshold).length;
-
-  // Stock by category
-  const categoryStats = {};
-  items.forEach(i => {
-    const cat = i.category || 'Uncategorized';
-    if (!categoryStats[cat]) categoryStats[cat] = { inStock: 0, onOrder: 0 };
-    categoryStats[cat].inStock += i.qty_in_stock || 0;
-    categoryStats[cat].onOrder += i.on_order || 0;
-  });
-
-  if (loading) return <div className="text-gray-600">Loading inventory...</div>;
-
-  return (
-    <div className="space-y-6">
-      {/* Dashboard Summary */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Key Metrics */}
-        <div className="bg-gray-50 rounded-lg p-5">
-          <h4 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-3">Key Metrics</h4>
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <span className="text-gray-600">Total SKUs</span><span className="font-semibold text-gray-900">{totalSKUs}</span>
-            <span className="text-gray-600">Total Units in Stock</span><span className="font-semibold text-gray-900">{totalInStock}</span>
-            <span className="text-gray-600">Total Units On Order</span><span className="font-semibold text-gray-900">{totalOnOrder}</span>
-            <span className="text-gray-600">Total Expected Stock</span><span className="font-semibold text-gray-900">{totalExpected}</span>
-          </div>
-          <div className="mt-4 space-y-1.5">
-            <div className="flex items-center space-x-2">
-              <span className="inline-block w-3 h-3 rounded bg-red-400"></span>
-              <span className="text-sm text-gray-700">Out of Stock: <strong>{outOfStockCount}</strong></span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <span className="inline-block w-3 h-3 rounded bg-yellow-400"></span>
-              <span className="text-sm text-gray-700">Low Stock: <strong>{lowStockCount}</strong></span>
-            </div>
-            <div className="flex items-center space-x-2">
-              <span className="inline-block w-3 h-3 rounded bg-green-400"></span>
-              <span className="text-sm text-gray-700">OK: <strong>{okCount}</strong></span>
-            </div>
-          </div>
-          <div className="mt-4 pt-3 border-t border-gray-200">
-            <label className="block text-xs text-gray-500 mb-1">Low Stock Threshold</label>
-            <input
-              type="number"
-              min="0"
-              value={threshold}
-              onChange={(e) => updateThreshold(e.target.value)}
-              className="w-20 border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-          </div>
-        </div>
-
-        {/* Stock by Category */}
-        <div className="bg-gray-50 rounded-lg p-5">
-          <h4 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-3">Stock by Category</h4>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-200">
-                <th className="text-left py-1.5 font-semibold text-gray-700">Category</th>
-                <th className="text-right py-1.5 font-semibold text-gray-700">In Stock</th>
-                <th className="text-right py-1.5 font-semibold text-gray-700">On Order</th>
-                <th className="text-right py-1.5 font-semibold text-gray-700">Expected</th>
-              </tr>
-            </thead>
-            <tbody>
-              {Object.entries(categoryStats).sort(([a], [b]) => a.localeCompare(b)).map(([cat, stats]) => (
-                <tr key={cat} className="border-b border-gray-100">
-                  <td className="py-1.5 text-gray-900">{cat}</td>
-                  <td className="py-1.5 text-right text-gray-700">{stats.inStock}</td>
-                  <td className="py-1.5 text-right text-gray-700">{stats.onOrder}</td>
-                  <td className="py-1.5 text-right font-medium text-gray-900">{stats.inStock + stats.onOrder}</td>
-                </tr>
-              ))}
-              {Object.keys(categoryStats).length === 0 && (
-                <tr><td colSpan={4} className="py-4 text-center text-gray-500">No data yet</td></tr>
-              )}
-              {Object.keys(categoryStats).length > 0 && (
-                <tr className="font-semibold">
-                  <td className="py-1.5 text-gray-900">TOTAL</td>
-                  <td className="py-1.5 text-right text-gray-900">{totalInStock}</td>
-                  <td className="py-1.5 text-right text-gray-900">{totalOnOrder}</td>
-                  <td className="py-1.5 text-right text-gray-900">{totalExpected}</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Inventory Table */}
-      <div>
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">All Items</h3>
-          <button
-            onClick={addRow}
-            className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-blue-700 transition flex items-center space-x-2"
-          >
-            <Plus size={18} />
-            <span>Add Row</span>
-          </button>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-gray-200">
-                <th className="text-left py-3 px-3 text-sm font-semibold text-gray-700">Category</th>
-                <th className="text-left py-3 px-3 text-sm font-semibold text-gray-700">Item</th>
-                <th className="text-left py-3 px-3 text-sm font-semibold text-gray-700">Color</th>
-                <th className="text-left py-3 px-3 text-sm font-semibold text-gray-700">Size</th>
-                <th className="text-right py-3 px-3 text-sm font-semibold text-gray-700">Qty in Stock</th>
-                <th className="text-right py-3 px-3 text-sm font-semibold text-gray-700">On Order</th>
-                <th className="text-right py-3 px-3 text-sm font-semibold text-gray-700">Expected Stock</th>
-                <th className="text-center py-3 px-3 text-sm font-semibold text-gray-700">Status</th>
-                <th className="py-3 px-3 w-10"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map(item => {
-                const expected = (item.qty_in_stock || 0) + (item.on_order || 0);
-                const status = getStatus(item.qty_in_stock || 0);
-                return (
-                  <tr key={item.id} className="border-b border-gray-100">
-                    <td className="py-2 px-3">
-                      <select
-                        defaultValue={item.category}
-                        onChange={(e) => updateItem(item.id, 'category', e.target.value)}
-                        className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 bg-white"
-                      >
-                        <option value="">Select</option>
-                        {INVENTORY_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                      </select>
-                    </td>
-                    <td className="py-2 px-3">
-                      <input type="text" defaultValue={item.item} onBlur={(e) => updateItem(item.id, 'item', e.target.value)} placeholder="Item name" className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                    </td>
-                    <td className="py-2 px-3">
-                      <input type="text" defaultValue={item.color} onBlur={(e) => updateItem(item.id, 'color', e.target.value)} placeholder="Color" className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                    </td>
-                    <td className="py-2 px-3">
-                      <input type="text" defaultValue={item.size} onBlur={(e) => updateItem(item.id, 'size', e.target.value)} placeholder="Size" className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500" />
-                    </td>
-                    <td className="py-2 px-3">
-                      <input type="number" min="0" defaultValue={item.qty_in_stock} onBlur={(e) => updateItem(item.id, 'qty_in_stock', e.target.value)} className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 text-right" />
-                    </td>
-                    <td className="py-2 px-3">
-                      <input type="number" min="0" defaultValue={item.on_order} onBlur={(e) => updateItem(item.id, 'on_order', e.target.value)} className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 text-right" />
-                    </td>
-                    <td className="py-2 px-3 text-right text-sm font-medium text-gray-900">{expected}</td>
-                    <td className="py-2 px-3 text-center">
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap ${status.color}`}>{status.label}</span>
-                    </td>
-                    <td className="py-2 px-3 text-center">
-                      <button onClick={() => deleteItem(item.id)} className="text-red-400 hover:text-red-600 transition">
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-              {items.length === 0 && (
-                <tr>
-                  <td colSpan={9} className="py-8 text-center text-gray-500">No inventory items yet. Click "Add Row" to create one.</td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
     </div>
   );
 }

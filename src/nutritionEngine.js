@@ -339,6 +339,43 @@ const CARB_POOL = ['oats', 'sweet potato', 'brown rice cooked', 'banana', 'white
 const FAT_POOL = ['avocado', 'almonds', 'peanut butter', 'olive oil'];
 const VEG_POOL = ['mixed vegetables', 'spinach', 'berries'];
 
+const VEG_SIDE_GRAMS = 120;
+// Fat a protein food may bring past the meal's fat share before a leaner one is used instead.
+const FAT_OVER_TOLERANCE_G = 3;
+
+// Grams of a protein food + a carb food that together land on P g protein and
+// C g carbs. Solved as a pair because each brings some of the other's macro
+// (oats are 17% protein, lentils 20% carbs); sizing them one after the other
+// double-counted that and was part of the #498 overshoot.
+function solvePortions(pf, cf, P, C) {
+  const p1 = FOODS[pf].p / 100; const c1 = FOODS[pf].c / 100;
+  const p2 = FOODS[cf].p / 100; const c2 = FOODS[cf].c / 100;
+  const det = p1 * c2 - p2 * c1;
+  let gp = p1 ? P / p1 : 0;
+  let gc = 0;
+  if (Math.abs(det) > 1e-9) {
+    gp = (P * c2 - p2 * C) / det;
+    gc = (p1 * C - c1 * P) / det;
+  }
+  if (gc < 0) { gc = 0; gp = p1 ? P / p1 : 0; }
+  if (gp < 0) { gp = 0; gc = c2 ? C / c2 : 0; }
+  return { gp, gc };
+}
+
+function kcalOf(food, grams) { return (FOODS[food].kcal * grams) / 100; }
+
+/**
+ * Sample meals for the day's targets.
+ *
+ * #498: the meals must add up to `t.calories`. They are what is saved and what
+ * the athlete's profile totals, so a coach who set 3,200 kcal and got 3,930 kcal
+ * of food (eggs and salmon carried far more fat than the plan allowed, and
+ * nothing took it back out) saw an override that "did not work". Three things
+ * keep the total honest now: protein + carb portions are solved together, a
+ * protein food too fatty for the meal's fat share is swapped for the next one
+ * in the rotation that fits, and a final pass scales every portion except the
+ * fixed vegetable sides so the day lands on the calorie target.
+ */
 export function assembleMeals(t, prefs, day) {
   const n = Math.max(3, prefs.meals_per_day || 4);
   const names = ['Breakfast', 'Lunch', 'Dinner', 'Snack', 'Snack 2', 'Pre-sleep'].slice(0, n);
@@ -354,45 +391,55 @@ export function assembleMeals(t, prefs, day) {
   if (n >= 4) pW[n - 1] = 1.2;
   const pTotal = pW.reduce((a, b) => a + b, 0);
 
-  const meals = [];
-  for (let idx = 0; idx < names.length; idx += 1) {
-    const name = names[idx];
-    const share = pW[idx] / pTotal;
-    const mP = t.protein_g * share;
+  // Pass 1: raw (unrounded) portions per meal.
+  const drafts = names.map((name, idx) => {
+    const mP = t.protein_g * (pW[idx] / pTotal);
     const mC = t.carbs_g / n;
     const mF = t.fat_g / n;
-    const items = [];
 
-    const pf = name === 'Pre-sleep' ? slow[idx % slow.length] : proteins[idx % proteins.length];
-    const gramsP = FOODS[pf].p ? mP / (FOODS[pf].p / 100.0) : 0;
-    let it = addFood(pf, gramsP);
-    items.push(it);
-    let gotC = it.carbs_g; let gotF = it.fat_g;
+    const vf = (name === 'Lunch' || name === 'Dinner') && day !== DayType.DOUBLEHEADER ? veg[idx % veg.length] : null;
+    const side = vf ? VEG_SIDE_GRAMS / 100 : 0;
+    const P = Math.max(0, mP - (vf ? FOODS[vf].p * side : 0));
+    const C = Math.max(0, mC - (vf ? FOODS[vf].c * side : 0));
+    const F = mF - (vf ? FOODS[vf].f * side : 0);
 
     const cf = carbs[idx % carbs.length];
-    const gramsC = FOODS[cf].c ? Math.max(0, mC - gotC) / (FOODS[cf].c / 100.0) : 0;
-    it = addFood(cf, gramsC);
-    items.push(it);
-    gotF += it.fat_g;
-
-    if ((name === 'Lunch' || name === 'Dinner') && day !== DayType.DOUBLEHEADER) {
-      const vf = veg[idx % veg.length];
-      items.push(addFood(vf, 120));
+    const pool = name === 'Pre-sleep' ? slow : proteins;
+    // Same rotation as before for variety, but the first food whose fat fits wins.
+    let best = null;
+    for (let k = 0; k < pool.length; k += 1) {
+      const pf = pool[(idx + k) % pool.length];
+      const { gp, gc } = solvePortions(pf, cf, P, C);
+      const fatGot = (FOODS[pf].f * gp + FOODS[cf].f * gc) / 100;
+      const cand = { pf, gp, gc, fatGot, over: fatGot - F };
+      if (!best || cand.over < best.over) best = cand;
+      if (cand.over <= FAT_OVER_TOLERANCE_G) { best = cand; break; }
     }
 
-    const needF = mF - gotF;
-    if (needF > 2) {
-      const ff = fats[idx % fats.length];
-      items.push(addFood(ff, needF / (FOODS[ff].f / 100.0)));
-    }
+    const needF = F - best.fatGot;
+    const ff = needF > 2 ? fats[idx % fats.length] : null;
+    const portions = [[best.pf, best.gp], [cf, best.gc]];
+    if (ff) portions.push([ff, needF / (FOODS[ff].f / 100)]);
+    return { name, portions, vf };
+  });
 
-    const timing = {
-      Breakfast: 'morning', Lunch: 'midday', Dinner: 'evening', Snack: 'afternoon',
-      'Snack 2': 'pre/post training', 'Pre-sleep': '~30-60 min before bed',
-    }[name] || '';
-    meals.push({ name, timing, items });
-  }
-  return meals;
+  // Pass 2: scale to the calorie target. Food-table calories are not exactly
+  // 4/4/9 per gram and a restricted diet can leave no protein food that fits
+  // the fat share, so the draft total drifts; the vegetable sides stay fixed.
+  const sideKcal = drafts.reduce((s, d) => s + (d.vf ? kcalOf(d.vf, VEG_SIDE_GRAMS) : 0), 0);
+  const scalableKcal = drafts.reduce((s, d) => s + d.portions.reduce((a, [f, g]) => a + kcalOf(f, g), 0), 0);
+  const scale = scalableKcal > 0 && t.calories > sideKcal ? (t.calories - sideKcal) / scalableKcal : 1;
+
+  const timings = {
+    Breakfast: 'morning', Lunch: 'midday', Dinner: 'evening', Snack: 'afternoon',
+    'Snack 2': 'pre/post training', 'Pre-sleep': '~30-60 min before bed',
+  };
+  return drafts.map((d) => {
+    const items = d.portions.map(([f, g]) => addFood(f, g * scale)).filter((i) => i.grams > 0);
+    // Protein, carb, vegetable side, then added fat — the order meals were listed in before.
+    if (d.vf) items.splice(Math.min(2, items.length), 0, addFood(d.vf, VEG_SIDE_GRAMS));
+    return { name: d.name, timing: timings[d.name] || '', items };
+  });
 }
 
 export function mealTotals(meal) {

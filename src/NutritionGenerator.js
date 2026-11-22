@@ -404,6 +404,19 @@ export default function NutritionGenerator({ userId, userRole }) {
                   </div>
                 );
               })}
+              {/* #498: the day total, so a coach can see the meals land on the target. */}
+              {(() => {
+                const day = plan.meals.reduce((s, m) => {
+                  const x = mealTotals(m);
+                  return { kcal: s.kcal + Math.round(x.kcal), protein: s.protein + x.protein, carbs: s.carbs + x.carbs, fat: s.fat + x.fat };
+                }, { kcal: 0, protein: 0, carbs: 0, fat: 0 });
+                return (
+                  <div className="border-t border-gray-200 pt-2 flex items-center justify-between">
+                    <div className="font-semibold text-gray-800 text-sm">Day total</div>
+                    <div className="text-xs font-mono font-semibold text-gray-700">{day.kcal} kcal · P{Math.round(day.protein)} C{Math.round(day.carbs)} F{Math.round(day.fat)}</div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
 

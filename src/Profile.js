@@ -54,7 +54,9 @@ const PROFILE_TABS = [
   { key: 'general', label: 'General' },
   // #474: MLB The Show style ratings card. Player profiles only; a player
   // only ever reaches their own profile (refused above the tab bar).
-  { key: 'card', label: 'Player Card', viewedRoles: ['player'] },
+  // #495: `viewedSecondaryRole` also matches users.secondary_role, so staff who
+  // train as players (Cordell: admin + player) get their card in either view.
+  { key: 'card', label: 'Player Card', viewedRoles: ['player'], viewedSecondaryRole: true },
   { key: 'athletes', label: 'Athletes', viewedRoles: ['coach', 'admin'] },
   // #226: Programming was merged into Schedule (they function the same). The
   // Schedule tab now renders the calendar followed by the programming list.
@@ -2632,7 +2634,10 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
                 // dead permission test in a live permission filter is how the next
                 // person re-adds the tab and thinks it is already covered.
                 if (tab.roles && !tab.roles.includes(userRole)) return false;
-                if (tab.viewedRoles && (!userData || !tab.viewedRoles.includes(userData.role))) return false;
+                if (tab.viewedRoles && (!userData || !(
+                  tab.viewedRoles.includes(userData.role)
+                  || (tab.viewedSecondaryRole && tab.viewedRoles.includes(userData.secondary_role))
+                ))) return false;
                 return true;
               }).map(tab => (
                 <button
