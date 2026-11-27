@@ -522,7 +522,7 @@ function Thread({ kind, id, userId, userRole, channel, dmOther, onBack, onSent }
               <div className="flex-1 min-w-0 group">
                 {newSender && (
                   <div className="flex items-baseline space-x-2">
-                    <span className="font-semibold text-sm text-gray-900">{m.sender?.full_name || 'Unknown'}</span>
+                    <span className="font-semibold text-sm text-gray-900">{m.sender?.full_name || (m.sender_id ? 'Unknown' : 'Former staff')}</span>
                     <span className="text-xs text-gray-500">{formatTime(m.created_at)}</span>
                   </div>
                 )}

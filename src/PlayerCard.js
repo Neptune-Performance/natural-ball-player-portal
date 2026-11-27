@@ -5,7 +5,12 @@
 // turned into 0-99 ratings by src/playerRatings.js, the one config to tune.
 // Coach ratings (player_rating_overrides) replace any category, and the
 // 'overall' row holds the Potential letter.
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+//
+// #496: staff also get "3 things to work on" — hovering (or tapping) a skill
+// bar shows that skill's three focus areas with drills, and a top-3 card sits
+// under the Player Card. The rules are in src/playerFocus.js; athletes never
+// see any of it.
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Edit2, Save, X, Info } from 'lucide-react';
 import { supabase } from './supabaseClient';
 import { formatUserError } from './errorMessage';
@@ -14,6 +19,8 @@ import {
   RATING_CATEGORIES, POTENTIAL_GRADES, COHORT_LABELS,
   buildPlayerRatings, ratingTone, formatMetricValue, metricBasis, categoryBasis,
 } from './playerRatings';
+import { buildFocus, focusVideoNames, videoKey, FLAG_WINDOW_DAYS } from './playerFocus';
+import { FocusList, FocusPopover, CoachFocusCard } from './FocusAreas';
 
 function ageFromDob(dob) {
   if (!dob) return null;
@@ -44,6 +51,17 @@ export default function PlayerCard({ userId, userRole, loggedInUserId }) {
   const [error, setError] = useState('');
   const [selected, setSelected] = useState('hitting');
   const [editing, setEditing] = useState(false);
+  // #496 (staff only): Mechanics notes + Exercise Library links for the focus
+  // areas, and which skill bar the pointer is over.
+  const [mechNotes, setMechNotes] = useState([]);
+  const [videoMap, setVideoMap] = useState({});
+  const [hover, setHover] = useState(null); // { key, rect }
+  const hoverTimer = useRef(null);
+  // Touch screens have no hover; there the tapped skill's list shows in the
+  // panel under the bars instead of a pop-up.
+  const canHover = useMemo(() => (
+    typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches
+  ), []);
 
   const load = useCallback(async () => {
     if (!userId) return;
@@ -65,7 +83,49 @@ export default function PlayerCard({ userId, userRole, loggedInUserId }) {
 
   useEffect(() => { load(); }, [load]);
 
+  // The focus-area extras load on their own so the card never waits on them,
+  // and a failure here only costs the drill links / coach flags.
+  useEffect(() => {
+    if (!isStaff || !userId) { setMechNotes([]); return undefined; }
+    let cancelled = false;
+    (async () => {
+      const since = new Date(Date.now() - FLAG_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+      const names = focusVideoNames();
+      const [notes, videos] = await Promise.all([
+        supabase.from('player_notes').select('area, deficiencies, created_at')
+          .eq('player_id', userId).eq('category', 'mechanics').gte('created_at', since),
+        supabase.from('exercise_videos').select('name_key, video_url').in('name_key', names.map(videoKey)),
+      ]);
+      if (cancelled) return;
+      if (notes.error) console.error('PlayerCard: mechanics notes failed to load:', notes.error);
+      if (videos.error) console.error('PlayerCard: drill videos failed to load:', videos.error);
+      setMechNotes(notes.data || []);
+      const map = {};
+      for (const v of videos.data || []) if (v.video_url && !map[v.name_key]) map[v.name_key] = v.video_url;
+      setVideoMap(map);
+    })();
+    return () => { cancelled = true; };
+  }, [isStaff, userId]);
+
+  useEffect(() => () => clearTimeout(hoverTimer.current), []);
+
   const model = useMemo(() => buildPlayerRatings(inputs, overrides), [inputs, overrides]);
+  const focus = useMemo(
+    () => (isStaff ? buildFocus(model, mechNotes, videoMap) : null),
+    [isStaff, model, mechNotes, videoMap]
+  );
+  const openHover = (key, el) => {
+    if (!focus || !canHover || !el) return;
+    clearTimeout(hoverTimer.current);
+    setHover({ key, rect: el.getBoundingClientRect() });
+  };
+  // A short delay so the pointer can travel from the bar into the pop-up (its
+  // drill links are clickable).
+  const scheduleHoverClose = () => {
+    clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setHover(null), 200);
+  };
+  const closeHover = useCallback(() => { clearTimeout(hoverTimer.current); setHover(null); }, []);
   const selectedCat = model.categories.find((c) => c.key === selected) || model.categories[0];
   const overallTone = ratingTone(model.overall);
   const age = ageFromDob(person?.date_of_birth);
@@ -143,7 +203,13 @@ export default function PlayerCard({ userId, userRole, loggedInUserId }) {
                 key={cat.key}
                 type="button"
                 onClick={() => setSelected(cat.key)}
-                title={categoryBasis(cat)}
+                onMouseEnter={(e) => openHover(cat.key, e.currentTarget)}
+                onMouseLeave={scheduleHoverClose}
+                onFocus={(e) => openHover(cat.key, e.currentTarget)}
+                onBlur={scheduleHoverClose}
+                // Staff with a mouse get the focus pop-up instead of the
+                // one-line native tooltip (two tooltips would overlap).
+                title={focus && canHover ? undefined : categoryBasis(cat)}
                 aria-label={`${cat.label} ${cat.rating ?? 'not graded'}`}
                 className={`flex flex-col items-center rounded-lg px-0.5 py-1.5 transition touch-manipulation ${active ? 'bg-white/15' : 'hover:bg-white/5'}`}
               >
@@ -199,6 +265,19 @@ export default function PlayerCard({ userId, userRole, loggedInUserId }) {
               No data on file for this yet. {isStaff ? 'Set a coach rating with Edit ratings.' : 'Your coaches can add a rating.'}
             </p>
           )}
+          {focus && (
+            <div className="mt-3 border-t border-white/10 pt-3">
+              <p className="mb-2 text-[11px] font-bold uppercase tracking-[0.16em] text-brand-cream">
+                {focus.byCategory[selectedCat.key]?.items.length ? `${focus.byCategory[selectedCat.key].items.length} to work on` : 'Focus areas'}
+                <span className="ml-1.5 font-normal normal-case tracking-normal text-white/50">· coaches only</span>
+              </p>
+              <FocusList
+                items={focus.byCategory[selectedCat.key]?.items}
+                empty={focus.byCategory[selectedCat.key]?.empty}
+                dark
+              />
+            </div>
+          )}
         </div>
 
         <p className="relative mt-3 flex items-start gap-1.5 text-[11px] text-white/50">
@@ -208,6 +287,19 @@ export default function PlayerCard({ userId, userRole, loggedInUserId }) {
           </span>
         </p>
       </div>
+
+      {focus && hover && (
+        <FocusPopover
+          anchor={hover.rect}
+          label={model.categories.find((c) => c.key === hover.key)?.label || ''}
+          entry={focus.byCategory[hover.key]}
+          onEnter={() => clearTimeout(hoverTimer.current)}
+          onLeave={scheduleHoverClose}
+          onClose={closeHover}
+        />
+      )}
+
+      {focus && <CoachFocusCard top={focus.top} name={person?.full_name} />}
 
       {isStaff && !editing && (
         <button

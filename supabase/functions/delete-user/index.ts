@@ -67,8 +67,17 @@ Deno.serve(async (req) => {
     // first) risks an orphaned auth row that permanently blocks email reuse.
     const { error: deleteError } = await serviceClient.auth.admin.deleteUser(user_id);
     if (deleteError) {
+      // #501: when a database constraint stops the delete, GoTrue answers with
+      // an empty body and supabase-js turns that into the message "{}", which
+      // is what the admin saw ("Error deleting user: {}"). Log the real thing
+      // and send back a sentence a person can act on.
+      console.error("delete-user: auth delete failed", user_id, deleteError);
+      const raw = String(deleteError.message || "").trim();
+      const message = raw && raw !== "{}" && raw !== "[object Object]"
+        ? raw
+        : "The database refused to delete this account because other records still depend on it. Nothing was deleted.";
       return new Response(
-        JSON.stringify({ error: deleteError.message }),
+        JSON.stringify({ error: message }),
         { status: 400, headers: { ...cors, "Content-Type": "application/json" } }
       );
     }

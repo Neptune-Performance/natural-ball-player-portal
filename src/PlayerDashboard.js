@@ -14,6 +14,7 @@ import WhoopCommunityCodeCard from './WhoopCommunityCode';
 // #277: "My RSVPs" — upcoming team events with this player's current answer,
 // so they can answer several at once without opening each event.
 import { MyRsvpsCard } from './EventRsvp';
+import { reservationsForDate, facilityEventsForDate } from './todaySchedule';
 
 const fmtLocalDate = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 
@@ -665,7 +666,6 @@ export default function PlayerDashboard({ userId, waiverSigned, setCurrentView, 
       setPlayerData(userData);
 
       const today = fmtLocalDate(new Date());
-      const todayDow = new Date().getDay();
 
       // Fetch today's schedule events for the player (direct + via team_ids)
       const playerTeamIds = (userData.team_members || []).map(tm => tm.team_id).filter(Boolean);
@@ -692,19 +692,23 @@ export default function PlayerDashboard({ userId, waiverSigned, setCurrentView, 
       ];
 
       // Fetch facility events for today — only ones the player is involved in:
-      // their own lesson/assessment (athlete_id) or events they signed up for.
+      // their own lesson/assessment (athlete_id / athlete_ids) or events they
+      // signed up for. #502: recurring series are expanded by their real
+      // recurrence rule with per-occurrence exceptions honoured (see
+      // todaySchedule.js); the old weekday match never ended a series and
+      // showed occurrences that had been cancelled.
+      const mine = `athlete_id.eq.${userId},athlete_ids.cs.{${userId}}`;
       const [{ data: ownFacilityToday }, { data: ownFacilityMasters }, { data: signups }] = await Promise.all([
         supabase
           .from('facility_events')
           .select('*')
-          .eq('athlete_id', userId)
+          .or(mine)
           .eq('is_recurring', false)
-          .is('recurrence_parent_id', null)
           .eq('event_date', today),
         supabase
           .from('facility_events')
           .select('*')
-          .eq('athlete_id', userId)
+          .or(mine)
           .eq('is_recurring', true)
           .is('recurrence_parent_id', null),
         supabase
@@ -714,20 +718,19 @@ export default function PlayerDashboard({ userId, waiverSigned, setCurrentView, 
           .eq('event_date', today),
       ]);
 
-      const todayFacility = [...(ownFacilityToday || [])];
-      (ownFacilityMasters || []).forEach(master => {
-        const masterDate = new Date(master.event_date + 'T00:00:00');
-        const todayDate = new Date(today + 'T00:00:00');
-        if (todayDate >= masterDate) {
-          const masterDow = masterDate.getDay();
-          if (masterDow === todayDow) {
-            if (!master.recurrence_end_date || todayDate <= new Date(master.recurrence_end_date + 'T00:00:00')) {
-              todayFacility.push({ ...master, event_date: today });
-            }
-          }
-        }
-      });
-      const seenIds = new Set(todayFacility.map(e => e.id));
+      const masterIds = (ownFacilityMasters || []).map(m => m.id);
+      let facilityExceptions = [];
+      if (masterIds.length > 0) {
+        const { data: exRows } = await supabase
+          .from('facility_events')
+          .select('*')
+          .in('recurrence_parent_id', masterIds)
+          .or(`original_date.eq.${today},event_date.eq.${today}`);
+        facilityExceptions = exRows || [];
+      }
+
+      const todayFacility = facilityEventsForDate(ownFacilityToday, ownFacilityMasters, facilityExceptions, today);
+      const seenIds = new Set(todayFacility.map(e => e._master_id || e.id));
       (signups || []).forEach(s => {
         const ev = s.facility_events;
         if (ev && !seenIds.has(ev.id)) {
@@ -736,29 +739,29 @@ export default function PlayerDashboard({ userId, waiverSigned, setCurrentView, 
         }
       });
 
-      // Fetch player's confirmed training slot reservations
+      // The player's sessions TODAY. #502: a reservation is one dated
+      // occurrence, so its own slot_date decides — the previous weekday match
+      // re-listed every past booking on a weekly slot each week, at that old
+      // booking's time. Pending requests are listed too (marked Pending) so
+      // the family sees the session they are waiting on.
       const { data: myReservations } = await supabase
         .from('slot_reservations')
         .select('*, training_slots(*)')
         .eq('player_id', userId)
-        .eq('status', 'confirmed');
+        .eq('slot_date', today)
+        .in('status', ['confirmed', 'pending']);
 
-      const todaySlots = (myReservations || []).filter(r => {
-        const slot = r.training_slots;
-        if (!slot) return false;
-        if (slot.slot_date === today) return true;
-        if (slot.repeat_weekly) {
-          const slotDow = new Date(slot.slot_date + 'T00:00:00').getDay();
-          if (slotDow === todayDow) {
-            const slotStart = new Date(slot.slot_date + 'T00:00:00');
-            const todayDate = new Date(today + 'T00:00:00');
-            if (todayDate >= slotStart) {
-              if (!slot.repeat_end_date || todayDate <= new Date(slot.repeat_end_date + 'T00:00:00')) return true;
-            }
-          }
-        }
-        return false;
-      });
+      const bookedSlotIds = [...new Set((myReservations || []).map(r => r.slot_id).filter(Boolean))];
+      let slotTombstones = [];
+      if (bookedSlotIds.length > 0) {
+        const { data: tombRows } = await supabase
+          .from('training_slots')
+          .select('id, recurrence_parent_id, original_date, is_exception')
+          .in('recurrence_parent_id', bookedSlotIds)
+          .eq('original_date', today);
+        slotTombstones = tombRows || [];
+      }
+      const todaySlots = reservationsForDate(myReservations, slotTombstones, today);
 
       // Combine all schedule items
       const allSchedule = [];
@@ -790,6 +793,7 @@ export default function PlayerDashboard({ userId, waiverSigned, setCurrentView, 
           title: 'Training Session',
           time: slot.start_time,
           type: 'training',
+          pending: r.status === 'pending',
           duration: slot.duration_minutes,
         });
       });
@@ -849,7 +853,10 @@ export default function PlayerDashboard({ userId, waiverSigned, setCurrentView, 
         .select('*, training_slots(*)')
         .eq('player_id', userId)
         .eq('status', 'pending')
-        .order('created_at', { ascending: false })
+        // #502: a request for a date that has already passed is no longer
+        // waiting on anyone; listing it only confused families.
+        .gte('slot_date', today)
+        .order('slot_date', { ascending: true })
         .limit(5);
 
       (pendingReservations || []).forEach(r => {
@@ -1037,9 +1044,15 @@ export default function PlayerDashboard({ userId, waiverSigned, setCurrentView, 
                         {item.duration && <p className="text-xs text-gray-500">{item.duration} min</p>}
                       </div>
                     </div>
-                    <span className={`px-2 py-1 rounded-full text-xs font-medium capitalize ${getTypeColor(item.type)}`}>
-                      {item.type}
-                    </span>
+                    {item.pending ? (
+                      <span className="px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800" title="Waiting for your coach to confirm">
+                        Pending
+                      </span>
+                    ) : (
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium capitalize ${getTypeColor(item.type)}`}>
+                        {item.type}
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>

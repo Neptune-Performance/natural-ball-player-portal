@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { supabase, supabaseUrl, supabaseAnonKey } from './supabaseClient';
 import { readAllPages } from './readAllPages';
 import { buildSlotExceptionMap, getSlotDateException } from './scheduleUtils';
+import { facilityEventsForDate } from './todaySchedule';
 import AdminSettings from './AdminSettings';
 import PlayerDashboard from './PlayerDashboard';
 import CoachTools from './CoachTools';
@@ -2042,24 +2043,18 @@ function AdminDashboard({ userId, userRole, setCurrentView }) {
 
   const fetchTodayFacilityEvents = async () => {
     const today = fmtLocalDate(new Date());
-    const todayDow = new Date().getDay();
 
-    const { data: nonRecurring } = await supabase.from('facility_events').select('*').eq('is_recurring', false).is('recurrence_parent_id', null).eq('event_date', today);
-    const { data: masters } = await supabase.from('facility_events').select('*').eq('is_recurring', true).is('recurrence_parent_id', null);
+    // #502: expand recurring series by their real recurrence rule and honour
+    // per-occurrence exceptions (todaySchedule.js). The old weekday match read
+    // a `recurrence_end_date` column that does not exist, so a series never
+    // ended here and cancelled occurrences still showed.
+    const [{ data: nonRecurring }, { data: masters }, { data: exceptions }] = await Promise.all([
+      supabase.from('facility_events').select('*').eq('is_recurring', false).eq('event_date', today),
+      supabase.from('facility_events').select('*').eq('is_recurring', true).is('recurrence_parent_id', null),
+      supabase.from('facility_events').select('*').not('recurrence_parent_id', 'is', null).or(`original_date.eq.${today},event_date.eq.${today}`),
+    ]);
 
-    const events = [...(nonRecurring || [])];
-    (masters || []).forEach(master => {
-      const masterDate = new Date(master.event_date + 'T00:00:00');
-      const todayDate = new Date(today + 'T00:00:00');
-      if (todayDate >= masterDate) {
-        const masterDow = masterDate.getDay();
-        if (masterDow === todayDow) {
-          if (!master.recurrence_end_date || todayDate <= new Date(master.recurrence_end_date + 'T00:00:00')) {
-            events.push({ ...master, event_date: today });
-          }
-        }
-      }
-    });
+    const events = facilityEventsForDate(nonRecurring, masters, exceptions, today);
     events.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || ''));
     setTodayFacilityEvents(events);
   };

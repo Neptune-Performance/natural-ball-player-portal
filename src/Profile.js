@@ -3321,7 +3321,7 @@ export default function Profile({ userId, userRole, onBack, loggedInUserId, onNa
                                 <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${catInfo.color}`}>{catInfo.label}</span>
                                 {areaLabel && <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-800 border border-amber-200">{areaLabel}</span>}
                                 {note.context && <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700 capitalize">{note.context}</span>}
-                                <span className="text-xs text-gray-500">{note.author?.full_name || 'Unknown'}</span>
+                                <span className="text-xs text-gray-500">{note.author?.full_name || (note.created_by ? 'Unknown' : 'Former staff')}</span>
                                 <span className="text-xs text-gray-400">{new Date(note.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
                               </div>
                               {canModify && (

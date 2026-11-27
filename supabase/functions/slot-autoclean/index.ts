@@ -49,8 +49,8 @@
 // ?coach_id=<uuid> (restrict to one coach).
 //
 // Env: FACILITY_TIMEZONE (default America/Los_Angeles — the facility is in
-// Kirkland, WA). NOTE _shared/availability.ts defaults to America/Chicago and
-// that secret is not set, so its occurrenceStartMs is NOT used here.
+// Kirkland, WA). _shared/availability.ts used to default to America/Chicago
+// (fixed in #502), which is why its occurrenceStartMs is NOT used here.
 // SLOT_AUTOCLEAN_EXCLUDE_COACH_IDS: comma-separated coach user ids to never
 // touch (e.g. the "NBP+ Strength and Conditioning" group-session account) —
 // unset = every coach.

@@ -127,8 +127,12 @@ export function addMinutes(startTime: string, mins: number): string {
 
 // Occurrence start as epoch ms. Event/slot times are stored as facility-local
 // wall clock with no zone, while edge functions run in UTC — so convert via the
-// facility IANA timezone (matches the Square checkout timezone).
-const FACILITY_TZ = Deno.env.get("FACILITY_TIMEZONE") || "America/Chicago";
+// facility IANA timezone.
+// #502: the default was America/Chicago, and FACILITY_TIMEZONE has never been
+// set, so every public-booking cutoff was computed two hours early (a 3:00 PM
+// Kirkland session was treated as 3:00 PM Central = 1:00 PM Pacific). The
+// facility is in Kirkland, WA; this now matches every other function's default.
+const FACILITY_TZ = Deno.env.get("FACILITY_TIMEZONE") || "America/Los_Angeles";
 
 export function occurrenceStartMs(dateStr: string, timeStr?: string | null): number {
   const t = (timeStr || "00:00").slice(0, 5);

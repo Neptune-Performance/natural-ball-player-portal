@@ -24,8 +24,12 @@ async function deleteAuthUser(userId) {
       body: JSON.stringify({ user_id: userId }),
     }
   );
-  const result = await res.json();
-  if (!res.ok) throw new Error(result.error || 'Failed to delete auth user');
+  const result = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    // #501: an empty error body used to surface as "Error deleting user: {}".
+    const raw = typeof result.error === 'string' ? result.error.trim() : '';
+    throw new Error(raw && raw !== '{}' ? raw : 'This account could not be deleted. Nothing was removed.');
+  }
   return result;
 }
 
